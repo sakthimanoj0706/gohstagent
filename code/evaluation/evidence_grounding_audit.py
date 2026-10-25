@@ -74,7 +74,10 @@ def verify_json_snapshot_absence(fpath: Path, system_id: str, resource_id: str) 
     except Exception as e:
         return False, f"Malformed JSON: {e}"
 
-    if not isinstance(data, dict) or "snapshots" not in data or not isinstance(data["snapshots"], list):
+    if not isinstance(data, dict):
+        return False, "Malformed JSON snapshot: root is not a JSON object"
+
+    if "snapshots" not in data or not isinstance(data["snapshots"], list):
         return False, "Unrecognized JSON snapshot bundle structure: missing 'snapshots' array"
 
     table_map = {
@@ -189,18 +192,18 @@ def verify_deletion_log_absence(fpath: Path, resource_id: str, audit_at: datetim
     if ext == ".json":
         try:
             data = json.loads(content)
-            # connector_configurations
+            # 1. connector_configurations records
             if isinstance(data, dict) and "records" in data and isinstance(data["records"], list):
                 for rec in data["records"]:
                     if rec.get("resource_id") == resource_id:
                         res = str(rec.get("result", "")).upper()
-                        rec_time = rec.get("recorded_at") or data.get("exported_at")
                         if res in ("NOT_FOUND", "ABSENT", "DELETED"):
                             found_event = True
-                            event_timestamp = rec_time
+                            # Strictly genuine event timestamp: recorded_at (no file-level exported_at fallback)
+                            event_timestamp = rec.get("recorded_at")
                             event_desc = f"JSON record result={res}"
                             break
-            # service_resource_export
+            # 2. service_resource_export service_exports
             if not found_event and isinstance(data, dict) and "service_exports" in data:
                 for s_data in data["service_exports"].values():
                     if isinstance(s_data, dict):
@@ -209,26 +212,27 @@ def verify_deletion_log_absence(fpath: Path, resource_id: str, audit_at: datetim
                                 for item in sub_v:
                                     if item.get("resource_id") == resource_id:
                                         st_code = item.get("status_code")
-                                        rec_time = item.get("observed_at") or data.get("exported_at")
                                         if st_code == 404:
                                             found_event = True
-                                            event_timestamp = rec_time
+                                            # Strictly genuine event timestamp: observed_at (no file-level exported_at fallback)
+                                            event_timestamp = item.get("observed_at")
                                             event_desc = f"JSON readback status_code={st_code}"
                                             break
-            # customer_export_manifest
+            # 3. customer_export_manifest exports
             if not found_event and isinstance(data, dict) and "exports" in data:
                 for exp in data["exports"]:
                     if exp.get("resource_id") == resource_id:
                         status = str(exp.get("status", "")).upper()
                         if status in ("PURGED", "DELETED", "REMOVED"):
                             found_event = True
-                            event_timestamp = exp.get("purged_at") or data.get("exported_at")
+                            # Strictly genuine event timestamp: purged_at (no file-level exported_at fallback)
+                            event_timestamp = exp.get("purged_at")
                             event_desc = f"Export manifest status={status}"
                             break
         except Exception as e:
             return False, f"JSON parse error: {e}"
 
-    elif ext == ".log":
+    elif ext in (".log", ".txt"):
         for line in content.splitlines():
             if resource_id in line:
                 is_deletion = bool(
@@ -236,32 +240,17 @@ def verify_deletion_log_absence(fpath: Path, resource_id: str, audit_at: datetim
                 )
                 if is_deletion:
                     found_event = True
-                    m_time = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", line)
-                    event_timestamp = m_time.group(1) if m_time else None
-                    event_desc = f"Log line: {line.strip()[:60]}"
-                    break
-
-    elif ext == ".txt":
-        for line in content.splitlines():
-            if resource_id in line:
-                if any(w in line.lower() for w in ('not_found', 'not found', '404', 'rows=0', 'deleted', 'purged', 'removed', 'tombstone', 'closed')):
-                    found_event = True
+                    # Strictly genuine event timestamp directly on the matching line (no 10-line header fallback)
                     m_time = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", line)
-                    if not m_time:
-                        for hline in content.splitlines()[:10]:
-                            m_h = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", hline)
-                            if m_h:
-                                m_time = m_h
-                                break
                     event_timestamp = m_time.group(1) if m_time else None
-                    event_desc = f"Text record: {line.strip()[:60]}"
+                    event_desc = f"{ext[1:].upper()} line: {line.strip()[:60]}"
                     break
 
     if not found_event:
         return False, f"Resource '{resource_id}' mentioned without explicit deletion/readback event"
 
     if not event_timestamp:
-        return False, f"Deletion event for '{resource_id}' missing explicit point-in-time timestamp"
+        return False, f"Deletion event for '{resource_id}' missing explicit event-level timestamp"
 
     try:
         ev_dt = datetime.fromisoformat(event_timestamp.replace("Z", "+00:00"))
@@ -270,7 +259,7 @@ def verify_deletion_log_absence(fpath: Path, resource_id: str, audit_at: datetim
     except Exception as e:
         return False, f"Invalid event timestamp '{event_timestamp}': {e}"
 
-    return True, f"Verified explicit absence event ({event_desc}) at {event_timestamp}"
+    return True, f"Verified explicit absence event ({event_desc}) at genuine event timestamp {event_timestamp}"
 
 
 # =========================================================================
@@ -329,175 +318,291 @@ def verify_png_catalog(
 
 
 # =========================================================================
-# Unit Test Suite for Absence and Evidence Verification
+# Unit Test Suite for Absence and Evidence Verification (27 Scenarios)
 # =========================================================================
-def run_unit_tests():
-    print("Running comprehensive automated unit test suite (19 tests)...")
+def run_unit_tests() -> dict:
+    print("=" * 78)
+    print("PROGRAMMATIC UNIT TEST SUITE: INDEPENDENT VERIFICATION SCENARIOS")
+    print("=" * 78)
+
+    tests = []
+
     with tempfile.TemporaryDirectory() as tmpdir:
         td = Path(tmpdir)
         cutoff = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
 
-        # 1. JSON Snapshot Tests
-        bad_json = td / "bad.json"
-        bad_json.write_text("{malformed", encoding="utf-8")
-        ok, msg = verify_json_snapshot_absence(bad_json, "account_service", "acc_1")
-        assert not ok and "Malformed JSON" in msg
+        # -------------------------------------------------------------
+        # Category 1: JSON Snapshot Absence Verification (5 tests)
+        # -------------------------------------------------------------
+        def test_json_01():
+            p = td / "bad.json"
+            p.write_text("{malformed", encoding="utf-8")
+            ok, msg = verify_json_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "Malformed JSON" in msg
+        tests.append(("TEST_JSON_01_MALFORMED", "JSON Snapshot", "Rejects malformed JSON syntax", test_json_01))
 
-        missing_coll = td / "missing_coll.json"
-        missing_coll.write_text(json.dumps({"snapshots": [{"data_store": "search_service", "collection": "customer_search_documents", "records": []}]}), encoding="utf-8")
-        ok, msg = verify_json_snapshot_absence(missing_coll, "account_service", "acc_1")
-        assert not ok and "not found in snapshot" in msg
+        def test_json_02():
+            p = td / "not_dict.json"
+            p.write_text("[\"item1\", \"item2\"]", encoding="utf-8")
+            ok, msg = verify_json_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "root is not a JSON object" in msg
+        tests.append(("TEST_JSON_02_ROOT_NOT_DICT", "JSON Snapshot", "Rejects non-dictionary JSON root", test_json_02))
 
-        present_json = td / "present.json"
-        present_json.write_text(json.dumps({"snapshots": [{"data_store": "account_service", "collection": "customer_profiles", "records": [{"resource_id": "acc_1"}]}]}), encoding="utf-8")
-        ok, msg = verify_json_snapshot_absence(present_json, "account_service", "acc_1")
-        assert not ok and "is PRESENT" in msg
+        def test_json_03():
+            p = td / "missing_coll.json"
+            p.write_text(json.dumps({"snapshots": [{"data_store": "search_service", "collection": "customer_search_documents", "records": []}]}), encoding="utf-8")
+            ok, msg = verify_json_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "not found in snapshot" in msg
+        tests.append(("TEST_JSON_03_MISSING_COLLECTION", "JSON Snapshot", "Rejects snapshot missing service target collection", test_json_03))
 
-        absent_json = td / "absent.json"
-        absent_json.write_text(json.dumps({"snapshots": [{"data_store": "account_service", "collection": "customer_profiles", "records": [{"resource_id": "acc_2"}]}]}), encoding="utf-8")
-        ok, msg = verify_json_snapshot_absence(absent_json, "account_service", "acc_1")
-        assert ok and "confirmed ABSENT" in msg
-        print("  [PASS] 1. JSON snapshot absence tests (malformed, missing collection, present, absent)")
+        def test_json_04():
+            p = td / "present.json"
+            p.write_text(json.dumps({"snapshots": [{"data_store": "account_service", "collection": "customer_profiles", "records": [{"resource_id": "acc_1"}]}]}), encoding="utf-8")
+            ok, msg = verify_json_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "is PRESENT" in msg
+        tests.append(("TEST_JSON_04_RESOURCE_PRESENT", "JSON Snapshot", "Rejects snapshot where resource is present in target collection", test_json_04))
 
-        # 2. SQL Snapshot Tests
-        empty_sql = td / "empty.sql"
-        empty_sql.write_text("   ", encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(empty_sql, "account_service", "acc_1")
-        assert not ok and "Malformed SQL" in msg
+        def test_json_05():
+            p = td / "absent.json"
+            p.write_text(json.dumps({"snapshots": [{"data_store": "account_service", "collection": "customer_profiles", "records": [{"resource_id": "acc_2"}]}]}), encoding="utf-8")
+            ok, msg = verify_json_snapshot_absence(p, "account_service", "acc_1")
+            assert ok and "confirmed ABSENT" in msg
+        tests.append(("TEST_JSON_05_RESOURCE_ABSENT", "JSON Snapshot", "Verifies absence when resource is omitted from target collection", test_json_05))
 
-        # Incomplete schema: missing completeness indicators (no snapshot_scope or primary/replica topology)
-        no_indicator_sql = td / "no_indicator.sql"
-        no_indicator_sql.write_text("CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);", encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(no_indicator_sql, "account_service", "acc_1")
-        assert not ok and "missing recognized completeness indicators" in msg
+        # -------------------------------------------------------------
+        # Category 2: SQL Snapshot Completeness & Absence (8 tests)
+        # -------------------------------------------------------------
+        def test_sql_01():
+            p = td / "empty.sql"
+            p.write_text("   ", encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "Malformed SQL: file is empty" in msg
+        tests.append(("TEST_SQL_01_EMPTY", "SQL Snapshot", "Rejects empty SQL snapshot file", test_sql_01))
 
-        # Incomplete schema: missing resource_id column in target table
-        missing_col_sql = td / "missing_col.sql"
-        missing_col_sql.write_text("""
-        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-        CREATE TABLE customer_profiles (user_name TEXT, email TEXT);
-        """, encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(missing_col_sql, "account_service", "acc_1")
-        assert not ok and "missing 'resource_id' column" in msg
+        def test_sql_02():
+            p = td / "no_tables.sql"
+            p.write_text("-- Just comments\nSELECT 1;\n", encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "no CREATE TABLE statements found" in msg
+        tests.append(("TEST_SQL_02_NO_TABLES", "SQL Snapshot", "Rejects SQL without CREATE TABLE schema statements", test_sql_02))
 
-        # Wrong table
-        wrong_sql = td / "wrong.sql"
-        wrong_sql.write_text("""
-        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-        CREATE TABLE other_table (resource_id TEXT PRIMARY KEY);
-        """, encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(wrong_sql, "account_service", "acc_1")
-        assert not ok and "missing required table" in msg
+        def test_sql_03():
+            p = td / "no_indicators.sql"
+            p.write_text("CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);", encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "missing recognized completeness indicators" in msg
+        tests.append(("TEST_SQL_03_NO_COMPLETENESS_INDICATORS", "SQL Snapshot", "Rejects table without snapshot_scope or replica topology (non-tautological)", test_sql_03))
 
-        # Present resource in table
-        present_sql = td / "present.sql"
-        present_sql.write_text("""
-        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-        CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
-        INSERT INTO customer_profiles VALUES ('acc_1', 'Alice');
-        """, encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(present_sql, "account_service", "acc_1")
-        assert not ok and "is PRESENT" in msg
+        def test_sql_04():
+            p = td / "missing_col.sql"
+            p.write_text("""
+            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+            CREATE TABLE customer_profiles (user_name TEXT, email TEXT);
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "missing 'resource_id' column" in msg
+        tests.append(("TEST_SQL_04_MISSING_RESOURCE_ID_COL", "SQL Snapshot", "Rejects table schema missing resource_id primary key column", test_sql_04))
 
-        # Absent resource in table with snapshot_scope
-        absent_sql = td / "absent.sql"
-        absent_sql.write_text("""
-        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-        CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
-        INSERT INTO customer_profiles VALUES ('acc_2', 'Bob');
-        """, encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(absent_sql, "account_service", "acc_1")
-        assert ok and "confirmed ABSENT" in msg
+        def test_sql_05():
+            p = td / "wrong_table.sql"
+            p.write_text("""
+            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+            CREATE TABLE other_table (resource_id TEXT PRIMARY KEY);
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "missing required table" in msg
+        tests.append(("TEST_SQL_05_MISSING_TARGET_TABLE", "SQL Snapshot", "Rejects snapshot missing target table for required system", test_sql_05))
 
-        # Absent resource in table with replica topology
-        absent_replica_sql = td / "absent_replica.sql"
-        absent_replica_sql.write_text("""
-        CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
-        INSERT INTO customer_data_read_replica VALUES ('acc_2', 'Bob');
-        """, encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(absent_replica_sql, "account_service", "acc_1")
-        assert ok and "confirmed ABSENT" in msg
-        print("  [PASS] 2. SQL snapshot absence tests (malformed, no completeness indicators, missing column, wrong table, present, absent)")
+        def test_sql_06():
+            p = td / "present.sql"
+            p.write_text("""
+            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+            CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
+            INSERT INTO customer_profiles VALUES ('acc_1', 'Alice');
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "is PRESENT in table" in msg
+        tests.append(("TEST_SQL_06_RESOURCE_PRESENT", "SQL Snapshot", "Rejects snapshot when resource exists in table insert rows", test_sql_06))
 
-        # 3. Deletion-Log & Readback Tests
-        ord_log = td / "ordinary.log"
-        ord_log.write_text("2026-09-10T10:00:00Z level=INFO event=profile_lookup_started resource_id=acc_1 user=alice\n", encoding="utf-8")
-        ok, msg = verify_deletion_log_absence(ord_log, "acc_1", cutoff)
-        assert not ok and "without explicit deletion" in msg
+        def test_sql_07():
+            p = td / "absent_scope.sql"
+            p.write_text("""
+            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+            CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
+            INSERT INTO customer_profiles VALUES ('acc_2', 'Bob');
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert ok and "confirmed ABSENT from table" in msg
+        tests.append(("TEST_SQL_07_ABSENT_WITH_SNAPSHOT_SCOPE", "SQL Snapshot", "Verifies absence with snapshot_scope completeness indicator", test_sql_07))
 
-        # Negative test: missing event timestamp
-        no_ts_log = td / "no_ts.log"
-        no_ts_log.write_text("level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
-        ok, msg = verify_deletion_log_absence(no_ts_log, "acc_1", cutoff)
-        assert not ok and "missing explicit point-in-time timestamp" in msg
+        def test_sql_08():
+            p = td / "absent_replica.sql"
+            p.write_text("""
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
+            INSERT INTO customer_data_read_replica VALUES ('acc_2', 'Bob');
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert ok and "confirmed ABSENT from table" in msg
+        tests.append(("TEST_SQL_08_ABSENT_WITH_REPLICA_TOPOLOGY", "SQL Snapshot", "Verifies absence in recognized read replica topology table", test_sql_08))
 
-        # Negative test: post-cutoff event timestamp
-        post_cutoff_log = td / "post_cutoff.log"
-        post_cutoff_log.write_text("2026-09-20T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
-        ok, msg = verify_deletion_log_absence(post_cutoff_log, "acc_1", cutoff)
-        assert not ok and "after audit_at" in msg
+        # -------------------------------------------------------------
+        # Category 3: Genuine Event Timestamp Deletion Verification (8 tests)
+        # -------------------------------------------------------------
+        def test_evt_01():
+            p = td / "ordinary.log"
+            p.write_text("2026-09-10T10:00:00Z level=INFO event=profile_lookup resource_id=acc_1\n", encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert not ok and "without explicit deletion" in msg
+        tests.append(("TEST_EVT_01_ORDINARY_MENTION", "Event Timestamps", "Rejects ordinary log mention without deletion/readback status", test_evt_01))
 
-        valid_404 = td / "valid_404.log"
-        valid_404.write_text("2026-09-10T10:00:00Z level=INFO event=profile_lookup_completed resource_id=acc_1 rows=0 http_status=404\n", encoding="utf-8")
-        ok, msg = verify_deletion_log_absence(valid_404, "acc_1", cutoff)
-        assert ok and "Verified explicit absence" in msg
+        def test_evt_02():
+            p = td / "no_event_ts.log"
+            p.write_text("level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert not ok and "missing explicit event-level timestamp" in msg
+        tests.append(("TEST_EVT_02_MISSING_EVENT_TIMESTAMP", "Event Timestamps", "Rejects deletion event missing explicit event-level timestamp", test_evt_02))
 
-        valid_del = td / "valid_del.log"
-        valid_del.write_text("2026-09-10T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
-        ok, msg = verify_deletion_log_absence(valid_del, "acc_1", cutoff)
-        assert ok and "Verified explicit absence" in msg
-        print("  [PASS] 3. Deletion-log tests (ordinary mention, missing timestamp, post-cutoff, valid 404, valid deletion)")
+        def test_evt_03():
+            p = td / "file_ts_no_event_ts.json"
+            # Root has exported_at, but individual record lacks recorded_at
+            p.write_text(json.dumps({
+                "exported_at": "2026-09-10T10:00:00Z",
+                "records": [{"resource_id": "acc_1", "result": "NOT_FOUND"}]
+            }), encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert not ok and "missing explicit event-level timestamp" in msg
+        tests.append(("TEST_EVT_03_FILE_TS_WITHOUT_EVENT_TS", "Event Timestamps", "Rejects file-level exported_at fallback when record lacks event timestamp", test_evt_03))
 
-        # 4. PNG Image & Catalog Corroboration Tests
+        def test_evt_04():
+            p = td / "post_cutoff.log"
+            p.write_text("2026-09-20T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert not ok and "after audit_at" in msg
+        tests.append(("TEST_EVT_04_POST_CUTOFF_EVENT", "Event Timestamps", "Rejects deletion event with event timestamp after case audit_at cutoff", test_evt_04))
+
+        def test_evt_05():
+            p = td / "valid_404.json"
+            p.write_text(json.dumps({
+                "service_exports": {
+                    "account_service": {
+                        "readbacks": [
+                            {"resource_id": "acc_1", "status_code": 404, "observed_at": "2026-09-10T10:00:00Z"}
+                        ]
+                    }
+                }
+            }), encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert ok and "Verified explicit absence" in msg
+        tests.append(("TEST_EVT_05_VALID_404_READBACK", "Event Timestamps", "Verifies HTTP 404 readback with explicit observed_at event timestamp", test_evt_05))
+
+        def test_evt_06():
+            p = td / "valid_record.json"
+            p.write_text(json.dumps({
+                "records": [
+                    {"resource_id": "acc_1", "result": "NOT_FOUND", "recorded_at": "2026-09-10T10:00:00Z"}
+                ]
+            }), encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert ok and "Verified explicit absence" in msg
+        tests.append(("TEST_EVT_06_VALID_RECORD_RESULT", "Event Timestamps", "Verifies NOT_FOUND record with explicit recorded_at event timestamp", test_evt_06))
+
+        def test_evt_07():
+            p = td / "valid_purged.json"
+            p.write_text(json.dumps({
+                "exports": [
+                    {"resource_id": "acc_1", "status": "PURGED", "purged_at": "2026-09-10T10:00:00Z"}
+                ]
+            }), encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert ok and "Verified explicit absence" in msg
+        tests.append(("TEST_EVT_07_VALID_PURGED_MANIFEST", "Event Timestamps", "Verifies export PURGED manifest with explicit purged_at event timestamp", test_evt_07))
+
+        def test_evt_08():
+            p = td / "valid_log.log"
+            p.write_text("2026-09-10T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
+            ok, msg = verify_deletion_log_absence(p, "acc_1", cutoff)
+            assert ok and "Verified explicit absence" in msg
+        tests.append(("TEST_EVT_08_VALID_LOG_DELETION", "Event Timestamps", "Verifies service log deletion with explicit inline ISO event timestamp", test_evt_08))
+
+        # -------------------------------------------------------------
+        # Category 4: PNG Administrative Console & Catalog (6 tests)
+        # -------------------------------------------------------------
         png_file = td / "test_screenshot.png"
         img = Image.new("RGB", (100, 100), color="blue")
         img.save(png_file, format="PNG")
 
         cap_time = datetime(2026, 9, 10, 10, 0, 0, tzinfo=timezone.utc)
-        act_time_valid = "2026-09-10T10:05:00Z"
-
-        # Valid catalog activity with both user_id and email
-        valid_cat = {
+        base_cat = {
             "activity_id": "activity_4000",
             "resource_id": "acc_1",
-            "event_time": act_time_valid,
+            "event_time": "2026-09-10T10:05:00Z",
             "details": "Data catalog linked acc_1 (acc_1) to alice@example.com and user_01."
         }
-        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, valid_cat)
-        assert ok and "PNG verified via Pillow" in msg
 
-        # Negative test 1: missing user_id in catalog details
-        cat_no_user = dict(valid_cat)
-        cat_no_user["details"] = "Data catalog linked acc_1 (acc_1) to alice@example.com."
-        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_no_user)
-        assert not ok and "user_id 'user_01' not in details" in msg
+        def test_png_01():
+            ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, base_cat)
+            assert ok and "PNG verified via Pillow" in msg
+        tests.append(("TEST_PNG_01_VALID_CORROBORATION", "PNG & Catalog", "Verifies Pillow integrity and catalog corroborating user_id + registered email", test_png_01))
 
-        # Negative test 2: missing registered email in catalog details
-        cat_no_email = dict(valid_cat)
-        cat_no_email["details"] = "Data catalog linked acc_1 (acc_1) to other@example.com and user_01."
-        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_no_email)
-        assert not ok and "registered email not in details" in msg
+        def test_png_02():
+            cat = dict(base_cat, details="Data catalog linked acc_1 (acc_1) to alice@example.com.")
+            ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat)
+            assert not ok and "user_id 'user_01' not in details" in msg
+        tests.append(("TEST_PNG_02_MISSING_USER_ID", "PNG & Catalog", "Rejects catalog activity missing required subject user_id", test_png_02))
 
-        # Negative test 3: post-cutoff catalog event time
-        cat_post_cutoff = dict(valid_cat)
-        cat_post_cutoff["event_time"] = "2026-09-20T10:00:00Z"
-        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_post_cutoff)
-        assert not ok and "after audit_at" in msg
+        def test_png_03():
+            cat = dict(base_cat, details="Data catalog linked acc_1 (acc_1) to other@example.com and user_01.")
+            ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat)
+            assert not ok and "registered email not in details" in msg
+        tests.append(("TEST_PNG_03_MISSING_EMAIL", "PNG & Catalog", "Rejects catalog activity missing required registered email", test_png_03))
 
-        # Negative test 4: capture-to-catalog interval > 600s
-        cat_excess_delta = dict(valid_cat)
-        cat_excess_delta["event_time"] = "2026-09-10T10:15:00Z"  # 15 minutes = 900s
-        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_excess_delta)
-        assert not ok and "outside [0, 600s] window" in msg
+        def test_png_04():
+            cat = dict(base_cat, event_time="2026-09-20T10:00:00Z")
+            ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat)
+            assert not ok and "after audit_at" in msg
+        tests.append(("TEST_PNG_04_POST_CUTOFF_CATALOG", "PNG & Catalog", "Rejects catalog activity with event_time after case audit_at cutoff", test_png_04))
 
-        # Negative test 5: corrupted/invalid PNG file
-        corrupt_png = td / "corrupt.png"
-        corrupt_png.write_bytes(b"not a valid png file image data")
-        ok, msg = verify_png_catalog(corrupt_png, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, valid_cat)
-        assert not ok and "Pillow" in msg
-        print("  [PASS] 4. PNG & catalog tests (valid, missing user_id, missing email, post-cutoff, excess delta, corrupt PNG)")
+        def test_png_05():
+            cat = dict(base_cat, event_time="2026-09-10T10:15:00Z")  # delta = 900s > 600s
+            ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat)
+            assert not ok and "outside [0, 600s] window" in msg
+        tests.append(("TEST_PNG_05_EXCESSIVE_DELTA", "PNG & Catalog", "Rejects capture-to-catalog interval exceeding 600s window", test_png_05))
 
-    print("ALL 19 UNIT TESTS PASSED SUCCESSFULLY!\n")
+        def test_png_06():
+            corrupt = td / "corrupt.png"
+            corrupt.write_bytes(b"invalid binary image data")
+            ok, msg = verify_png_catalog(corrupt, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, base_cat)
+            assert not ok and "Pillow" in msg
+        tests.append(("TEST_PNG_06_CORRUPT_PNG", "PNG & Catalog", "Rejects corrupted PNG binary via Pillow format/integrity verification", test_png_06))
+
+        # Execute all tests programmatically
+        passed = 0
+        failed = 0
+        cat_counts = {}
+
+        for test_id, category, desc, test_fn in tests:
+            cat_counts[category] = cat_counts.get(category, 0) + 1
+            try:
+                test_fn()
+                passed += 1
+                print(f"  [PASS] {test_id:<36} | {category:<17} | {desc}")
+            except Exception as e:
+                failed += 1
+                print(f"  [FAIL] {test_id:<36} | {category:<17} | {desc} -> {e}")
+
+        total_executed = len(tests)
+        print("-" * 78)
+        print(f"PROGRAMMATIC TEST SUMMARY: {passed} PASSED, {failed} FAILED (TOTAL EXECUTED: {total_executed})")
+        for cat, cnt in cat_counts.items():
+            print(f"  - {cat:<25}: {cnt} tests")
+        print("=" * 78 + "\n")
+        assert failed == 0, f"{failed} unit tests failed!"
+        return {
+            "total_executed": total_executed,
+            "passed": passed,
+            "failed": failed,
+            "cat_counts": cat_counts
+        }
 
 
 # =========================================================================
@@ -511,8 +616,7 @@ def main() -> int:
     ap.add_argument("--run-tests", action="store_true", default=True, help="Run unit tests before full audit")
     args = ap.parse_args()
 
-    if args.run_tests:
-        run_unit_tests()
+    test_summary = run_unit_tests() if args.run_tests else None
 
     manifest = {r["file_id"]: r for r in csv.DictReader(open(DATASET / "evidence_files.csv", encoding="utf-8"))}
     activities = {r["activity_id"]: r for r in csv.DictReader(open(DATASET / "system_activity.csv", encoding="utf-8"))}
@@ -770,7 +874,19 @@ def main() -> int:
         "  4. *Structural Absence Verification*: Verifies database schema and table presence for snapshot omissions, and explicit 404/deletion events for log/JSON readbacks.",
         "  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).",
         "",
-        "## 2. Mutually Exclusive Primary Classification (Sums to 1,241)",
+        "## 2. Programmatic Unit Test Suite (27 Named Scenarios)",
+        "",
+        "All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 27-scenario programmatic test suite:",
+        "",
+        "| Test Category | Scenarios Executed | Status | Coverage & Validation Invariants |",
+        "| :--- | ---: | :---: | :--- |",
+        "| **JSON Snapshot Absence** | 5 | **PASS (5/5)** | Malformed syntax, non-dict root, missing target collection, resource presence rejection, confirmed omission |",
+        "| **SQL Snapshot Completeness** | 8 | **PASS (8/8)** | Empty file, missing DDL, missing completeness indicators (no tautology), missing resource_id column, missing target table, presence rejection, verified omission via `snapshot_scope` and read-replica topology |",
+        "| **Genuine Event Timestamps** | 8 | **PASS (8/8)** | Ordinary non-deletion mention, missing event timestamp rejection, file-level `exported_at` fallback rejection, post-cutoff event rejection, valid 404 readback with `observed_at`, valid `recorded_at`, valid `purged_at`, valid inline log timestamp |",
+        "| **PNG Console & Catalog** | 6 | **PASS (6/6)** | Pillow RGB format/integrity, missing `user_id` rejection, missing registered email rejection, post-cutoff catalog rejection, interval > 600s rejection, corrupt PNG rejection |",
+        "| **TOTAL TEST POPULATION** | **27** | **100% PASS** | **All 27 independent scenarios executed programmatically (0 failures)** |",
+        "",
+        "## 3. Mutually Exclusive Primary Classification (Sums to 1,241)",
         "",
         "| Primary Grounding Category | Steps | % of Audited | Grounding Mechanism & Operational Scope |",
         "| :--- | ---: | ---: | :--- |",
@@ -783,7 +899,7 @@ def main() -> int:
         f"| `VISUAL_CONSOLE_SCREENSHOT` | {primary_categories['VISUAL_CONSOLE_SCREENSHOT']} | {primary_categories['VISUAL_CONSOLE_SCREENSHOT']/total_audited*100:.2f}% | Administrative web console screenshots (PNG) verified via Pillow and corroborated by data catalog events |",
         "| **TOTAL AUDITED POPULATION** | **1241** | **100.00%** | **Reconciliation strictly equals total audited evidence-bearing steps (delta = 0)** |",
         "",
-        "## 3. Secondary & Supplementary Quality Metrics (Counted Separately)",
+        "## 4. Secondary & Supplementary Quality Metrics (Counted Separately)",
         "",
         f"- `temporal_cutoff_adherence`: **{secondary_tags['temporal_valid']} / {total_audited}** (100.00% captured <= `audit_at`)",
         f"- `png_pillow_verified`: **{secondary_tags['png_pillow_verified']} / 11** (100.00% valid format PNG, mode RGB, dimensions > 0, binary integrity OK)",
@@ -793,7 +909,7 @@ def main() -> int:
         f"- `readback_event_absence_verified`: **{secondary_tags['readback_event_absence_verified']} / 78** (100.00% verified 404/deletion events)",
         f"- `subject_identifier_in_text`: **{secondary_tags['subject_identifier_in_text']} / 1230** (Direct identity grounding in source text)",
         "",
-        "## 4. Forensic Investigation of the 11 Visual Console Steps & activity_4009",
+        "## 5. Forensic Investigation of the 11 Visual Console Steps & activity_4009",
         "",
         "Each of the 11 PNG image evidence files was independently inspected using Pillow and matched against `system_activity.csv` data catalog events:",
         "",
@@ -820,7 +936,7 @@ def main() -> int:
         "- **Automated Verification Performed**: The automated script checks file presence, parses headers, runs Pillow binary integrity verification (`img.verify()`), checks image format (`PNG`), checks mode (`RGB`), validates dimensions, enforces timestamp cutoffs (`captured_at <= audit_at`), and verifies companion catalog events in `system_activity.csv` linking resource and subject within 421s interval.",
         "- **Manual Visual Inspection**: Because optical character recognition (`pytesseract`) is not installed in the execution environment, semantic visual confirmation of on-screen labels (such as portal status badges and form fields) was performed via manual visual inspection and corroborated by companion catalog activities, rather than automated pixel-level OCR.",
         "",
-        "## 5. Mathematical Reconciliation Summary",
+        "## 6. Mathematical Reconciliation Summary",
         "",
         "$$\\begin{aligned}",
         "\\text{Total Audited Steps} &= 1241 \\\\",

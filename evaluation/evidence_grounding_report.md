@@ -2,7 +2,7 @@
 
 - **Dataset Evaluated**: `output.csv` against `deletion_requests.csv`
 - **Total Evidence-Bearing Steps Audited**: **1241**
-- **Verification Timestamp**: `2026-10-25T12:44:02.785696`
+- **Verification Timestamp**: `2026-10-25T14:06:10.463819`
 - **Mathematical Reconciliation Status**: **RECONCILED (100.00%)**
 
 ## 1. Population & Methodological Scope
@@ -15,7 +15,19 @@
   4. *Structural Absence Verification*: Verifies database schema and table presence for snapshot omissions, and explicit 404/deletion events for log/JSON readbacks.
   5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).
 
-## 2. Mutually Exclusive Primary Classification (Sums to 1,241)
+## 2. Programmatic Unit Test Suite (27 Named Scenarios)
+
+All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 27-scenario programmatic test suite:
+
+| Test Category | Scenarios Executed | Status | Coverage & Validation Invariants |
+| :--- | ---: | :---: | :--- |
+| **JSON Snapshot Absence** | 5 | **PASS (5/5)** | Malformed syntax, non-dict root, missing target collection, resource presence rejection, confirmed omission |
+| **SQL Snapshot Completeness** | 8 | **PASS (8/8)** | Empty file, missing DDL, missing completeness indicators (no tautology), missing resource_id column, missing target table, presence rejection, verified omission via `snapshot_scope` and read-replica topology |
+| **Genuine Event Timestamps** | 8 | **PASS (8/8)** | Ordinary non-deletion mention, missing event timestamp rejection, file-level `exported_at` fallback rejection, post-cutoff event rejection, valid 404 readback with `observed_at`, valid `recorded_at`, valid `purged_at`, valid inline log timestamp |
+| **PNG Console & Catalog** | 6 | **PASS (6/6)** | Pillow RGB format/integrity, missing `user_id` rejection, missing registered email rejection, post-cutoff catalog rejection, interval > 600s rejection, corrupt PNG rejection |
+| **TOTAL TEST POPULATION** | **27** | **100% PASS** | **All 27 independent scenarios executed programmatically (0 failures)** |
+
+## 3. Mutually Exclusive Primary Classification (Sums to 1,241)
 
 | Primary Grounding Category | Steps | % of Audited | Grounding Mechanism & Operational Scope |
 | :--- | ---: | ---: | :--- |
@@ -28,7 +40,7 @@
 | `VISUAL_CONSOLE_SCREENSHOT` | 11 | 0.89% | Administrative web console screenshots (PNG) verified via Pillow and corroborated by data catalog events |
 | **TOTAL AUDITED POPULATION** | **1241** | **100.00%** | **Reconciliation strictly equals total audited evidence-bearing steps (delta = 0)** |
 
-## 3. Secondary & Supplementary Quality Metrics (Counted Separately)
+## 4. Secondary & Supplementary Quality Metrics (Counted Separately)
 
 - `temporal_cutoff_adherence`: **1241 / 1241** (100.00% captured <= `audit_at`)
 - `png_pillow_verified`: **11 / 11** (100.00% valid format PNG, mode RGB, dimensions > 0, binary integrity OK)
@@ -38,7 +50,7 @@
 - `readback_event_absence_verified`: **78 / 78** (100.00% verified 404/deletion events)
 - `subject_identifier_in_text`: **1230 / 1230** (Direct identity grounding in source text)
 
-## 4. Forensic Investigation of the 11 Visual Console Steps & activity_4009
+## 5. Forensic Investigation of the 11 Visual Console Steps & activity_4009
 
 Each of the 11 PNG image evidence files was independently inspected using Pillow and matched against `system_activity.csv` data catalog events:
 
@@ -66,7 +78,7 @@ Each of the 11 PNG image evidence files was independently inspected using Pillow
 - **Automated Verification Performed**: The automated script checks file presence, parses headers, runs Pillow binary integrity verification (`img.verify()`), checks image format (`PNG`), checks mode (`RGB`), validates dimensions, enforces timestamp cutoffs (`captured_at <= audit_at`), and verifies companion catalog events in `system_activity.csv` linking resource and subject within 421s interval.
 - **Manual Visual Inspection**: Because optical character recognition (`pytesseract`) is not installed in the execution environment, semantic visual confirmation of on-screen labels (such as portal status badges and form fields) was performed via manual visual inspection and corroborated by companion catalog activities, rather than automated pixel-level OCR.
 
-## 5. Mathematical Reconciliation Summary
+## 6. Mathematical Reconciliation Summary
 
 $$\begin{aligned}
 \text{Total Audited Steps} &= 1241 \\
