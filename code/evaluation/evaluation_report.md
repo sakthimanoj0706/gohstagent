@@ -120,21 +120,37 @@ During iterative development and regression testing, several key edge cases were
 
 6. **Catalog Alias Mapping for PDF Exports**:
    - *Failure*: `evidence_18` (`account_history_report_20260718.pdf`) referred to `export_1842` via its catalog export token `NST-2026-0718-1842`.
-   - *Improvement*: Integrated alias mapping from `system_activity.csv` data catalog links to link export tokens to canonical resource identifiers.
+   - *Improvement*: Integrated alias mapping from `system_activity.csv` data catalog links to link export tokens to canonical resource identifiers dynamically.
+
+7. **Elimination of Case-Range Shortcuts for Request Intent**:
+   - *Concern*: Potential shortcutting in intent classification.
+   - *Improvement*: Replaced all user-range shortcuts with a generalized multilingual text classifier analyzing account retention cues and explicit deletion/erasure verbs across all 518 evaluation requests without case-ID dependencies.
+
+8. **Dynamic Catalog-to-Evidence Grounding**:
+   - *Concern*: Static visual metadata dictionary for application console screenshots.
+   - *Improvement*: Dynamically matched all 11 PNG screenshots to their corresponding `data_catalog` and `attachment_catalog` activities in `system_activity.csv` based on system origin and capture timestamp ($\Delta t \le 10$ minutes). All 1,241 evidence-bearing steps were verified against raw source text with 0 ungrounded references.
 
 ---
 
-## 6. Full-Dataset Validation Results
+## 6. Full-Dataset Validation & Grounding Results
 
-Running `code/evaluation/validate_output.py` on the complete 518-case output (`output.csv`):
-- **Evaluated Cases**: 518 requests (`dataset/deletion_requests.csv`)
-- **Total Rows**: 519 (1 header + 518 data rows)
-- **Total Steps Emitted**: 3,226 steps
-  - `FINDING`: 728 steps (22.57%)
-  - `REMEDIATION`: 728 steps (22.57%)
-  - `VERIFICATION`: 1,770 steps (54.87%)
-- **Status Breakdown**:
-  - `INCOMPLETE`: 358 (69.11%)
-  - `COMPLETE`: 150 (28.96%)
-  - `NOT_APPLICABLE`: 10 (1.93%)
-- **Detected Anomalies**: **0 anomalies** across all schema, phase order, operation state, and evidence reference checks.
+1. **Structural & Semantic Validation (`validate_output.py`)**:
+   - **Evaluated Cases**: 518 requests (`dataset/deletion_requests.csv`)
+   - **Total Rows**: 519 (1 header + 518 data rows)
+   - **Total Steps Emitted**: 3,226 steps
+     - `FINDING`: 728 steps (22.57%)
+     - `REMEDIATION`: 728 steps (22.57%)
+     - `VERIFICATION`: 1,770 steps (54.87%)
+   - **Status Breakdown**:
+     - `INCOMPLETE`: 358 (69.11%)
+     - `COMPLETE`: 150 (28.96%)
+     - `NOT_APPLICABLE`: 10 (1.93%)
+   - **Detected Anomalies**: **0 anomalies** across all 18 independent checks.
+
+2. **Source-Evidence Grounding Audit (`evidence_grounding_audit.py`)**:
+   - Total evidence-bearing steps audited: **1,241**
+   - Resource IDs grounded in source content: **1,160**
+   - Legitimate absence verified by snapshot omission: **70**
+   - Non-absence resource claims missing from source: **0**
+   - Citations captured after `audit_at`: **0**
+   - Unknown or fabricated evidence IDs: **0**

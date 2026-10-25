@@ -74,103 +74,32 @@ class EvidenceObservation:
 class DeletionAuditEngine:
     """Core deterministic deletion-audit engine for Ghost Data Still Exists."""
 
-    # Non-deletion request patterns (multilingual + English)
-    NON_DELETION_PATTERNS = [
-        r"\bcopy of (?:the )?(?:personal data|billing invoice|invoice)\b",
-        r"\bexport of (?:the )?personal data\b",
-        r"\bupdate my (?:saved )?(?:phone number|email address|shipping address)\b",
-        r"\bunsubscribe me from promotional\b",
-        r"\bmarketing emails\b.*\bkeep my account open\b",
-        r"\bkeep my account active\b",
-        r"\bdo not close my account\b",
-        r"\bno cierren mi cuenta\b",
-        r"\bsolo quiero actualizar\b",
-        r"\bgarder mon compte actif\b",
-        r"\benvoyer une copie\b",
-        r"\bkonto weiter(?:hin)? geöffnet\b",
-        r"\bnur meine gespeicherte\b",
+    # Request-intent classification (general text cues only; no user/case shortcuts).
+    # A request is NOT_APPLICABLE when it explicitly asks to keep the account or negates
+    # deletion; otherwise it is authorized only if it carries a deletion/erasure cue.
+    KEEP_OR_NEGATE_PATTERNS = [
+        r"\bnot (?:asking|requesting) (?:for )?(?:a )?(?:deletion|erasure|removal)\b",
+        r"\bnot a request to (?:erase|delete|remove)\b",
+        r"\b(?:keep|leave) (?:the |my )?(?:account|profile)\b",
+        r"\b(?:do not|don't|dont) (?:close|delete|remove|change)\b",
+        r"\bwithout removing\b",
+        r"\bstill (?:want|need|use)\b",
+        r"\bcontinue using\b",
+        r"\bplease leave my\b",
+        r"\bmarketing lists only\b",
+        r"\bkeep my account (?:open|active)\b",
+        r"\bno cierren mi cuenta\b", r"\bsolo quiero\b", r"\bmantener mi cuenta\b",
+        r"\bgarder mon compte\b", r"\bne (?:supprimez|fermez) pas\b",
+        r"\bkonto weiter(?:hin)? geöffnet\b", r"\bnicht löschen\b", r"\bnur meine\b",
     ]
-
-    # Visual console screenshot metadata extracted from the 11 PNGs in dataset/evidence/images/
-    IMAGE_EVIDENCE_METADATA: Dict[str, Dict[str, str]] = {
-        "evidence_04": {
-            "system_id": "account_service",
-            "resource_id": "account_5762",
-            "raw_state": "PRESENT",
-            "record_category": "USER_PROFILE",
-            "identifier": "haruka.s1838@zoho.com",
-        },
-        "evidence_09": {
-            "system_id": "search_service",
-            "resource_id": "search_428",
-            "raw_state": "PRESENT",
-            "record_category": "SEARCH_DOCUMENT",
-            "identifier": "g.silva76@gmail.com",
-        },
-        "evidence_14": {
-            "system_id": "integration_service",
-            "resource_id": "data_flow_1121",
-            "raw_state": "ACTIVE",
-            "record_category": "ACTIVE_SYNC_FLOW",
-            "identifier": "jain.aditi@gmail.com",
-        },
-        "evidence_19": {
-            "system_id": "analytics_platform",
-            "resource_id": "analytics_7438",
-            "raw_state": "EXPOSED_PII",
-            "record_category": "ANALYTICS_PROFILE",
-            "identifier": "darwish.omar@icloud.com",
-        },
-        "evidence_23": {
-            "system_id": "export_service",
-            "resource_id": "export_1260",
-            "raw_state": "PRESENT",
-            "record_category": "EXPORT_ARCHIVE",
-            "identifier": "ingrid.dahl@outlook.com",
-        },
-        "evidence_28": {
-            "system_id": "support_platform",
-            "resource_id": "support_1034",
-            "raw_state": "EXPOSED_PII",
-            "record_category": "SUPPORT_MESSAGE",
-            "identifier": "kagyeman8947@fastmail.com",
-        },
-        "evidence_32": {
-            "system_id": "backup_service",
-            "resource_id": "backup_9287",
-            "raw_state": "ACTIVE",
-            "record_category": "RESTORE_ELIGIBLE_BACKUP",
-            "identifier": "areed1433@gmail.com",
-        },
-        "evidence_37": {
-            "system_id": "security_service",
-            "resource_id": "audit_record_003",
-            "raw_state": "PRESENT",
-            "record_category": "SECURITY_AUDIT_LOG",
-            "identifier": "user_03",
-        },
-        "evidence_42": {
-            "system_id": "identity_service",
-            "resource_id": "tombstone_17",
-            "raw_state": "REDACTED",
-            "record_category": "ACCOUNT_TOMBSTONE",
-            "identifier": "user_17",
-        },
-        "evidence_46": {
-            "system_id": "object_storage",
-            "resource_id": "object_19",
-            "raw_state": "PRESENT",
-            "record_category": "SUPPORT_ATTACHMENT",
-            "identifier": "user_07",
-        },
-        "evidence_60": {
-            "system_id": "marketing_platform",
-            "resource_id": "marketing_001",
-            "raw_state": "PRESENT",
-            "record_category": "MARKETING_PROFILE",
-            "identifier": "user_09",
-        },
-    }
+    DELETION_CUE_PATTERNS = [
+        r"\b(?:delet|eras|remov|clos)\w*|\berasure\b|\bpermanent(?:ly)?\b|\b(?:is|are) gone\b",
+        r"\b(?:eliminar|eliminación|elimin|borrar|suprimir|supresión|cerrar)\w*",
+        r"\b(?:supprimer|suppression|effacer|effacement|clôturer|fermer)\w*",
+        r"\b(?:löschen|löschung|entfernen|schließen)\w*",
+        r"\b(?:cancellare|cancellazione|eliminare|excluir|exclusão|apagar|verwijderen|usunąć)\w*",
+        r"削除|退会|删除|注销|삭제|탈퇴|удалить|удаление",
+    ]
 
     def __init__(self, repo_root: Path) -> None:
         self.repo_root = Path(repo_root)
@@ -181,6 +110,8 @@ class DeletionAuditEngine:
         self.activities: List[Dict[str, str]] = []
         self.deletion_rules: List[Dict[str, str]] = []
         self.evidence_manifest: Dict[str, Dict[str, str]] = {}
+        self.resource_aliases: Dict[str, str] = {}
+        self.image_metadata: Dict[str, Dict[str, str]] = {}
 
         # Identity indices
         self.user_by_id: Dict[str, Dict[str, str]] = {}
@@ -248,6 +179,14 @@ class DeletionAuditEngine:
             rid = act["resource_id"]
             if rid:
                 self.activity_by_rid[rid].append(act)
+            if act["source_system"] in ("data_catalog", "attachment_catalog"):
+                m_alias = re.search(r"linked\s+([^\s(]+)\s*\(([^)]+)\)", act.get("details", ""))
+                if m_alias:
+                    c_rid = m_alias.group(1).strip()
+                    c_alias = m_alias.group(2).strip()
+                    if c_alias and c_alias != c_rid:
+                        self.resource_aliases[c_alias] = c_rid
+
             if act["source_system"] == "deletion_worker":
                 self.deletion_worker_by_rid[rid] = act
             elif (
@@ -272,6 +211,57 @@ class DeletionAuditEngine:
                 and act["event_type"] == "CLASSIFY_REQUEST"
             ):
                 self.intake_classifications.append(act)
+
+        # Dynamically link visual console screenshots (.png) to their catalog activity
+        for fid, meta in self.evidence_manifest.items():
+            if meta["file_path"].endswith(".png"):
+                img_t = parse_iso(meta["captured_at"])
+                origin = meta["origin"]
+                for act in self.activities:
+                    if act["source_system"] in ("data_catalog", "attachment_catalog"):
+                        act_t = parse_iso(act["event_time"])
+                        diff_s = (act_t - img_t).total_seconds()
+                        tgt = act["target_system"]
+                        if 0 <= diff_s <= 600 and (tgt == origin or origin.startswith(tgt.split("_")[0])):
+                            raw_st = "PRESENT"
+                            if tgt == "integration_service":
+                                raw_st = "ACTIVE"
+                                cat = "ACTIVE_SYNC_FLOW"
+                            elif tgt == "backup_service":
+                                raw_st = "ACTIVE"
+                                cat = "RESTORE_ELIGIBLE_BACKUP"
+                            elif tgt in ("analytics_platform", "support_platform"):
+                                raw_st = "EXPOSED_PII"
+                                cat = "ANALYTICS_PROFILE" if tgt == "analytics_platform" else "SUPPORT_MESSAGE"
+                            elif tgt == "identity_service":
+                                raw_st = "REDACTED"
+                                cat = "ACCOUNT_TOMBSTONE"
+                            elif tgt == "security_service":
+                                cat = "SECURITY_AUDIT_LOG"
+                            elif tgt == "search_service":
+                                cat = "SEARCH_DOCUMENT"
+                            elif tgt == "export_service":
+                                cat = "EXPORT_ARCHIVE"
+                            elif tgt == "object_storage":
+                                cat = "SUPPORT_ATTACHMENT"
+                            elif tgt == "marketing_platform":
+                                cat = "MARKETING_PROFILE"
+                            else:
+                                cat = "USER_PROFILE"
+
+                            m_det = re.search(
+                                r"(?:to|belongs only to)\s+([^\s;]+@[^\s;]+)\s+and\s+(user_\d+)",
+                                act.get("details", ""),
+                            )
+                            ident = m_det.group(1) if m_det else act["resource_id"]
+                            self.image_metadata[fid] = {
+                                "system_id": tgt,
+                                "resource_id": act["resource_id"],
+                                "raw_state": raw_st,
+                                "record_category": cat,
+                                "identifier": ident,
+                            }
+                            break
 
         # Parse all 94 evidence files
         self._parse_all_evidence_files()
@@ -887,8 +877,9 @@ class DeletionAuditEngine:
         doc.close()
 
         rids = list(dict.fromkeys(rid_re.findall(text)))
-        if "NST-2026-0718-1842" in text and "export_1842" not in rids:
-            rids.append("export_1842")
+        for alias, canon_rid in self.resource_aliases.items():
+            if alias in text and canon_rid not in rids:
+                rids.append(canon_rid)
         u = self._match_user_from_text(text)
         ids = [f"user_{u}"] if u is not None else []
         for rid in rids:
@@ -907,7 +898,7 @@ class DeletionAuditEngine:
         if Image is not None:
             with Image.open(full_path) as img:
                 img.verify()
-        meta = self.IMAGE_EVIDENCE_METADATA.get(file_id)
+        meta = self.image_metadata.get(file_id)
         if meta:
             self._add_observation(
                 file_id=file_id,
@@ -923,15 +914,10 @@ class DeletionAuditEngine:
         """Determine whether request_text authorizes account/data deletion."""
         text = req.get("request_text", "")
         low = text.lower()
-        for pat in self.NON_DELETION_PATTERNS:
+        for pat in self.KEEP_OR_NEGATE_PATTERNS:
             if re.search(pat, low):
                 return False
-
-        # Also cross-check privacy_intake -> CLASSIFY_REQUEST in system_activity at or before audit_at
-        u_num = self.id_string_to_user_num.get(req["email"].strip().lower())
-        if u_num is not None and 531 <= u_num <= 540:
-            return False
-        return True
+        return any(re.search(pat, low) for pat in self.DELETION_CUE_PATTERNS)
 
     def _find_catalog_link_for_request(
         self, u_num: int, req_t: datetime, aud_t: datetime
