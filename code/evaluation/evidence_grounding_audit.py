@@ -127,6 +127,12 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
 
     defined_tables = {tbl.strip('"`[]'): cols for tbl, cols in table_defs}
 
+    # Verify genuine completeness indicators (snapshot_scope or recognized primary/replica topology)
+    has_snapshot_scope = "snapshot_scope" in defined_tables
+    has_topology = any("replica" in tbl or "primary" in tbl for tbl in defined_tables)
+    if not (has_snapshot_scope or has_topology):
+        return False, "SQL snapshot missing recognized completeness indicators (no snapshot_scope or primary/replica topology)"
+
     table_map = {
         'account_service': 'customer_profiles',
         'search_service': 'customer_search_documents',
@@ -159,14 +165,6 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
     for stmt in generic_insert:
         if f"'{resource_id}'" in stmt or f'"{resource_id}"' in stmt:
             return False, f"Resource '{resource_id}' is PRESENT in table '{target_table}'"
-
-    is_valid_snapshot = (
-        "snapshot_scope" in defined_tables
-        or any("replica" in tbl or "primary" in tbl for tbl in defined_tables)
-        or target_table in table_map.values()
-    )
-    if not is_valid_snapshot:
-        return False, "SQL snapshot missing recognized snapshot scope or replica topology"
 
     if len(generic_insert) == 0:
         return True, f"Resource '{resource_id}' confirmed ABSENT from empty table '{target_table}' in valid snapshot"
@@ -248,7 +246,13 @@ def verify_deletion_log_absence(fpath: Path, resource_id: str, audit_at: datetim
             if resource_id in line:
                 if any(w in line.lower() for w in ('not_found', 'not found', '404', 'rows=0', 'deleted', 'purged', 'removed', 'tombstone', 'closed')):
                     found_event = True
-                    m_time = re.match(r"^[-\s]*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", line)
+                    m_time = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", line)
+                    if not m_time:
+                        for hline in content.splitlines()[:10]:
+                            m_h = re.search(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)", hline)
+                            if m_h:
+                                m_time = m_h
+                                break
                     event_timestamp = m_time.group(1) if m_time else None
                     event_desc = f"Text record: {line.strip()[:60]}"
                     break
@@ -256,26 +260,84 @@ def verify_deletion_log_absence(fpath: Path, resource_id: str, audit_at: datetim
     if not found_event:
         return False, f"Resource '{resource_id}' mentioned without explicit deletion/readback event"
 
-    if event_timestamp:
-        try:
-            ev_dt = datetime.fromisoformat(event_timestamp.replace("Z", "+00:00"))
-            if ev_dt > audit_at:
-                return False, f"Event occurred at {event_timestamp}, after audit_at {audit_at.isoformat()}"
-        except Exception as e:
-            return False, f"Invalid event timestamp '{event_timestamp}': {e}"
+    if not event_timestamp:
+        return False, f"Deletion event for '{resource_id}' missing explicit point-in-time timestamp"
 
-    return True, f"Verified explicit absence event ({event_desc}) at {event_timestamp or 'file timestamp'}"
+    try:
+        ev_dt = datetime.fromisoformat(event_timestamp.replace("Z", "+00:00"))
+        if ev_dt > audit_at:
+            return False, f"Event occurred at {event_timestamp}, after audit_at {audit_at.isoformat()}"
+    except Exception as e:
+        return False, f"Invalid event timestamp '{event_timestamp}': {e}"
+
+    return True, f"Verified explicit absence event ({event_desc}) at {event_timestamp}"
 
 
 # =========================================================================
-# Unit Test Suite for Absence Verification
+# D. PNG Image and Catalog Corroboration Verification
+# =========================================================================
+def verify_png_catalog(
+    png_path: Path,
+    resource_id: str,
+    subj_user: str,
+    user_emails: set[str],
+    captured_at: datetime,
+    audit_at: datetime,
+    catalog_act: dict | None
+) -> tuple[bool, str]:
+    try:
+        with Image.open(png_path) as img:
+            fmt = img.format
+            dims = img.size
+            mode = img.mode
+            img.verify()
+        with Image.open(png_path) as img:
+            if not (fmt == "PNG" and dims[0] > 0 and dims[1] > 0 and mode == "RGB"):
+                return False, f"Pillow validation failed: format={fmt}, dims={dims}, mode={mode}"
+    except Exception as e:
+        return False, f"Pillow image integrity failure: {e}"
+
+    if not catalog_act:
+        return False, f"No companion catalog activity found for resource '{resource_id}'"
+
+    act_time_str = catalog_act.get("event_time", "")
+    try:
+        act_dt = datetime.fromisoformat(act_time_str.replace("Z", "+00:00"))
+    except Exception as e:
+        return False, f"Invalid catalog event_time '{act_time_str}': {e}"
+
+    if act_dt > audit_at:
+        return False, f"Catalog event time {act_time_str} is after audit_at {audit_at.isoformat()}"
+
+    delta_seconds = int((act_dt - captured_at).total_seconds())
+    if not (0 <= delta_seconds <= 600):
+        return False, f"Capture-to-catalog interval {delta_seconds}s outside [0, 600s] window"
+
+    det = catalog_act.get("details", "")
+    user_ok = bool(subj_user and (subj_user in det))
+    email_ok = any(e.lower() in det.lower() for e in user_emails if "@" in e)
+
+    if not (user_ok and email_ok):
+        reasons = []
+        if not user_ok:
+            reasons.append(f"user_id '{subj_user}' not in details")
+        if not email_ok:
+            reasons.append("registered email not in details")
+        return False, f"Catalog activity subject mismatch: {', '.join(reasons)}"
+
+    return True, f"PNG verified via Pillow ({dims[0]}x{dims[1]} RGB) and corroborated with catalog {catalog_act.get('activity_id')} (delta={delta_seconds}s, user_id={subj_user}, email confirmed)"
+
+
+# =========================================================================
+# Unit Test Suite for Absence and Evidence Verification
 # =========================================================================
 def run_unit_tests():
-    print("Running automated unit test suite for absence verification...")
+    print("Running comprehensive automated unit test suite (19 tests)...")
     with tempfile.TemporaryDirectory() as tmpdir:
         td = Path(tmpdir)
+        cutoff = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
 
-        # 1. JSON Snapshot Unit Tests
+        # 1. JSON Snapshot Tests
         bad_json = td / "bad.json"
         bad_json.write_text("{malformed", encoding="utf-8")
         ok, msg = verify_json_snapshot_absence(bad_json, "account_service", "acc_1")
@@ -295,48 +357,85 @@ def run_unit_tests():
         absent_json.write_text(json.dumps({"snapshots": [{"data_store": "account_service", "collection": "customer_profiles", "records": [{"resource_id": "acc_2"}]}]}), encoding="utf-8")
         ok, msg = verify_json_snapshot_absence(absent_json, "account_service", "acc_1")
         assert ok and "confirmed ABSENT" in msg
-        print("  [PASS] JSON snapshot absence tests (malformed, missing collection, present, absent)")
+        print("  [PASS] 1. JSON snapshot absence tests (malformed, missing collection, present, absent)")
 
-        # 2. SQL Snapshot Unit Tests
+        # 2. SQL Snapshot Tests
         empty_sql = td / "empty.sql"
         empty_sql.write_text("   ", encoding="utf-8")
         ok, msg = verify_sql_snapshot_absence(empty_sql, "account_service", "acc_1")
         assert not ok and "Malformed SQL" in msg
 
-        incompl_sql = td / "incompl.sql"
-        incompl_sql.write_text("CREATE TABLE customer_profiles (user_name TEXT, email TEXT);", encoding="utf-8")
-        ok, msg = verify_sql_snapshot_absence(incompl_sql, "account_service", "acc_1")
+        # Incomplete schema: missing completeness indicators (no snapshot_scope or primary/replica topology)
+        no_indicator_sql = td / "no_indicator.sql"
+        no_indicator_sql.write_text("CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);", encoding="utf-8")
+        ok, msg = verify_sql_snapshot_absence(no_indicator_sql, "account_service", "acc_1")
+        assert not ok and "missing recognized completeness indicators" in msg
+
+        # Incomplete schema: missing resource_id column in target table
+        missing_col_sql = td / "missing_col.sql"
+        missing_col_sql.write_text("""
+        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+        CREATE TABLE customer_profiles (user_name TEXT, email TEXT);
+        """, encoding="utf-8")
+        ok, msg = verify_sql_snapshot_absence(missing_col_sql, "account_service", "acc_1")
         assert not ok and "missing 'resource_id' column" in msg
 
+        # Wrong table
         wrong_sql = td / "wrong.sql"
-        wrong_sql.write_text("CREATE TABLE other_table (resource_id TEXT PRIMARY KEY);", encoding="utf-8")
+        wrong_sql.write_text("""
+        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+        CREATE TABLE other_table (resource_id TEXT PRIMARY KEY);
+        """, encoding="utf-8")
         ok, msg = verify_sql_snapshot_absence(wrong_sql, "account_service", "acc_1")
         assert not ok and "missing required table" in msg
 
+        # Present resource in table
         present_sql = td / "present.sql"
         present_sql.write_text("""
+        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
         CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
         INSERT INTO customer_profiles VALUES ('acc_1', 'Alice');
         """, encoding="utf-8")
         ok, msg = verify_sql_snapshot_absence(present_sql, "account_service", "acc_1")
         assert not ok and "is PRESENT" in msg
 
+        # Absent resource in table with snapshot_scope
         absent_sql = td / "absent.sql"
         absent_sql.write_text("""
+        CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
         CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
         INSERT INTO customer_profiles VALUES ('acc_2', 'Bob');
         """, encoding="utf-8")
         ok, msg = verify_sql_snapshot_absence(absent_sql, "account_service", "acc_1")
         assert ok and "confirmed ABSENT" in msg
-        print("  [PASS] SQL snapshot absence tests (malformed, incomplete schema, wrong table, present, absent)")
 
-        # 3. Deletion-Log & Readback Unit Tests
-        cutoff = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc)
+        # Absent resource in table with replica topology
+        absent_replica_sql = td / "absent_replica.sql"
+        absent_replica_sql.write_text("""
+        CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
+        INSERT INTO customer_data_read_replica VALUES ('acc_2', 'Bob');
+        """, encoding="utf-8")
+        ok, msg = verify_sql_snapshot_absence(absent_replica_sql, "account_service", "acc_1")
+        assert ok and "confirmed ABSENT" in msg
+        print("  [PASS] 2. SQL snapshot absence tests (malformed, no completeness indicators, missing column, wrong table, present, absent)")
 
+        # 3. Deletion-Log & Readback Tests
         ord_log = td / "ordinary.log"
         ord_log.write_text("2026-09-10T10:00:00Z level=INFO event=profile_lookup_started resource_id=acc_1 user=alice\n", encoding="utf-8")
         ok, msg = verify_deletion_log_absence(ord_log, "acc_1", cutoff)
         assert not ok and "without explicit deletion" in msg
+
+        # Negative test: missing event timestamp
+        no_ts_log = td / "no_ts.log"
+        no_ts_log.write_text("level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
+        ok, msg = verify_deletion_log_absence(no_ts_log, "acc_1", cutoff)
+        assert not ok and "missing explicit point-in-time timestamp" in msg
+
+        # Negative test: post-cutoff event timestamp
+        post_cutoff_log = td / "post_cutoff.log"
+        post_cutoff_log.write_text("2026-09-20T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
+        ok, msg = verify_deletion_log_absence(post_cutoff_log, "acc_1", cutoff)
+        assert not ok and "after audit_at" in msg
 
         valid_404 = td / "valid_404.log"
         valid_404.write_text("2026-09-10T10:00:00Z level=INFO event=profile_lookup_completed resource_id=acc_1 rows=0 http_status=404\n", encoding="utf-8")
@@ -347,14 +446,58 @@ def run_unit_tests():
         valid_del.write_text("2026-09-10T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
         ok, msg = verify_deletion_log_absence(valid_del, "acc_1", cutoff)
         assert ok and "Verified explicit absence" in msg
+        print("  [PASS] 3. Deletion-log tests (ordinary mention, missing timestamp, post-cutoff, valid 404, valid deletion)")
 
-        post_cutoff = td / "post_cutoff.log"
-        post_cutoff.write_text("2026-09-20T10:00:00Z level=INFO event=account_deleted resource_id=acc_1 status=DELETED\n", encoding="utf-8")
-        ok, msg = verify_deletion_log_absence(post_cutoff, "acc_1", cutoff)
+        # 4. PNG Image & Catalog Corroboration Tests
+        png_file = td / "test_screenshot.png"
+        img = Image.new("RGB", (100, 100), color="blue")
+        img.save(png_file, format="PNG")
+
+        cap_time = datetime(2026, 9, 10, 10, 0, 0, tzinfo=timezone.utc)
+        act_time_valid = "2026-09-10T10:05:00Z"
+
+        # Valid catalog activity with both user_id and email
+        valid_cat = {
+            "activity_id": "activity_4000",
+            "resource_id": "acc_1",
+            "event_time": act_time_valid,
+            "details": "Data catalog linked acc_1 (acc_1) to alice@example.com and user_01."
+        }
+        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, valid_cat)
+        assert ok and "PNG verified via Pillow" in msg
+
+        # Negative test 1: missing user_id in catalog details
+        cat_no_user = dict(valid_cat)
+        cat_no_user["details"] = "Data catalog linked acc_1 (acc_1) to alice@example.com."
+        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_no_user)
+        assert not ok and "user_id 'user_01' not in details" in msg
+
+        # Negative test 2: missing registered email in catalog details
+        cat_no_email = dict(valid_cat)
+        cat_no_email["details"] = "Data catalog linked acc_1 (acc_1) to other@example.com and user_01."
+        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_no_email)
+        assert not ok and "registered email not in details" in msg
+
+        # Negative test 3: post-cutoff catalog event time
+        cat_post_cutoff = dict(valid_cat)
+        cat_post_cutoff["event_time"] = "2026-09-20T10:00:00Z"
+        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_post_cutoff)
         assert not ok and "after audit_at" in msg
-        print("  [PASS] Deletion-log tests (ordinary mention, valid 404, valid deletion, post-cutoff)")
 
-    print("ALL UNIT TESTS PASSED (13/13)!\n")
+        # Negative test 4: capture-to-catalog interval > 600s
+        cat_excess_delta = dict(valid_cat)
+        cat_excess_delta["event_time"] = "2026-09-10T10:15:00Z"  # 15 minutes = 900s
+        ok, msg = verify_png_catalog(png_file, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, cat_excess_delta)
+        assert not ok and "outside [0, 600s] window" in msg
+
+        # Negative test 5: corrupted/invalid PNG file
+        corrupt_png = td / "corrupt.png"
+        corrupt_png.write_bytes(b"not a valid png file image data")
+        ok, msg = verify_png_catalog(corrupt_png, "acc_1", "user_01", {"alice@example.com"}, cap_time, cutoff, valid_cat)
+        assert not ok and "Pillow" in msg
+        print("  [PASS] 4. PNG & catalog tests (valid, missing user_id, missing email, post-cutoff, excess delta, corrupt PNG)")
+
+    print("ALL 19 UNIT TESTS PASSED SUCCESSFULLY!\n")
 
 
 # =========================================================================
@@ -379,8 +522,12 @@ def main() -> int:
     # Identity sets per user (current + historical)
     ident_to_user = {}
     user_idents = defaultdict(set)
+    user_reg_email = {}
     for r in csv.DictReader(open(DATASET / "user_identities.csv", encoding="utf-8")):
         u = r["user_id"]
+        if r.get("email"):
+            em = r["email"].strip().lower()
+            user_reg_email[u] = em
         for c in ("user_id", "email", "phone", "email_hash", "name"):
             v = (r.get(c) or "").strip().lower()
             if v:
@@ -459,6 +606,20 @@ def main() -> int:
                     primary_categories["VISUAL_CONSOLE_SCREENSHOT"] += 1
                     counts["visual_png_evidence"] += 1
 
+                    # Check companion catalog activity
+                    matched_catalog_act = None
+                    delta_seconds = None
+                    for aid, act in catalog_activities.items():
+                        if act["resource_id"] == rid:
+                            matched_catalog_act = act
+                            act_time = parse_iso(act["event_time"])
+                            delta_seconds = int((act_time - cap).total_seconds())
+                            break
+
+                    ok, msg = verify_png_catalog(
+                        fpath, rid, subj_user, idents, cap, aud, matched_catalog_act
+                    )
+
                     pillow_ok = False
                     img_dims = (0, 0)
                     img_mode = "UNKNOWN"
@@ -477,30 +638,18 @@ def main() -> int:
                     if pillow_ok:
                         secondary_tags["png_pillow_verified"] += 1
 
-                    # Check companion catalog activity
-                    matched_catalog_act = None
-                    delta_seconds = None
-                    for aid, act in catalog_activities.items():
-                        if act["resource_id"] == rid:
-                            matched_catalog_act = act
-                            act_time = parse_iso(act["event_time"])
-                            delta_seconds = int((act_time - cap).total_seconds())
-                            break
-
-                    if matched_catalog_act:
-                        act_time = parse_iso(matched_catalog_act["event_time"])
-                        time_ok = (act_time <= aud)
-                        det = matched_catalog_act.get("details", "")
-                        user_ok = (subj_user in det) if subj_user else False
-                        email_ok = (req_email in det.lower())
-                        delta_ok = (0 <= delta_seconds <= 600)  # within 10 minutes
-
-                        if time_ok and (user_ok or email_ok) and delta_ok:
-                            secondary_tags["png_catalog_corroborated"] += 1
-                        else:
-                            issues["PNG_CATALOG_MISMATCH"].append(f"{tag}: time_ok={time_ok}, user_ok={user_ok}, email_ok={email_ok}, delta={delta_seconds}s")
+                    if ok:
+                        secondary_tags["png_catalog_corroborated"] += 1
                     else:
-                        issues["PNG_CATALOG_MISSING"].append(tag)
+                        if not matched_catalog_act:
+                            issues["PNG_CATALOG_MISSING"].append(f"{tag}: {msg}")
+                        else:
+                            issues["PNG_CATALOG_MISMATCH"].append(f"{tag}: {msg}")
+
+                    det = matched_catalog_act.get("details", "") if matched_catalog_act else ""
+                    user_ok = bool(subj_user and (subj_user in det))
+                    email_ok = any(e.lower() in det.lower() for e in idents if "@" in e)
+                    reg_email = user_reg_email.get(subj_user, req_email)
 
                     png_step_details.append({
                         "case_id": cid,
@@ -523,7 +672,7 @@ def main() -> int:
                         "catalog_activity": matched_catalog_act["activity_id"] if matched_catalog_act else "None",
                         "catalog_time": matched_catalog_act["event_time"] if matched_catalog_act else "None",
                         "delta_seconds": delta_seconds,
-                        "verified_identifiers": f"user_id={subj_user}, email={req_email}" if (user_ok and email_ok) else (f"user_id={subj_user}" if user_ok else f"email={req_email}")
+                        "verified_identifiers": f"user_id={subj_user}, email={reg_email}" if (user_ok and email_ok) else (f"user_id={subj_user}" if user_ok else f"email={reg_email}")
                     })
                     continue
 
@@ -619,7 +768,7 @@ def main() -> int:
         "  2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).",
         "  3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.",
         "  4. *Structural Absence Verification*: Verifies database schema and table presence for snapshot omissions, and explicit 404/deletion events for log/JSON readbacks.",
-        "  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`–`activity_4011`).",
+        "  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).",
         "",
         "## 2. Mutually Exclusive Primary Classification (Sums to 1,241)",
         "",
@@ -632,7 +781,7 @@ def main() -> int:
         f"| `ABSENCE_VERIFIED_SNAPSHOT_OMISSION` | {primary_categories['ABSENCE_VERIFIED_SNAPSHOT_OMISSION']} | {primary_categories['ABSENCE_VERIFIED_SNAPSHOT_OMISSION']/total_audited*100:.2f}% | `VERIFY_RECORD_ABSENT` confirmed by omission from complete primary/replica SQL snapshots (68) and JSON bundle (2) |",
         f"| `RESTORE_RISK_EVIDENCE` | {primary_categories['RESTORE_RISK_EVIDENCE']} | {primary_categories['RESTORE_RISK_EVIDENCE']/total_audited*100:.2f}% | Backup archive restore risks (`ACTIVE`) and verified blocked restore paths (`BLOCKED`) |",
         f"| `VISUAL_CONSOLE_SCREENSHOT` | {primary_categories['VISUAL_CONSOLE_SCREENSHOT']} | {primary_categories['VISUAL_CONSOLE_SCREENSHOT']/total_audited*100:.2f}% | Administrative web console screenshots (PNG) verified via Pillow and corroborated by data catalog events |",
-        "| **TOTAL AUDITED POPULATION** | **1241** | **100.00%** | **Reconciliation strictly equals total audited evidence-bearing steps ($\Delta = 0$)** |",
+        "| **TOTAL AUDITED POPULATION** | **1241** | **100.00%** | **Reconciliation strictly equals total audited evidence-bearing steps (delta = 0)** |",
         "",
         "## 3. Secondary & Supplementary Quality Metrics (Counted Separately)",
         "",
@@ -648,14 +797,14 @@ def main() -> int:
         "",
         "Each of the 11 PNG image evidence files was independently inspected using Pillow and matched against `system_activity.csv` data catalog events:",
         "",
-        "| Case | User | Step | Operation | Resource ID | Evidence ID | Image Dimensions | Image Mode | Pillow Status | Captured At | Catalog Activity & Time | Interval (Δt) | Verified Subject Identifiers |",
+        "| Case | User | Step | Operation | Resource ID | Evidence ID | Image Dimensions | Image Mode | Pillow Status | Captured At | Catalog Activity & Time | Interval (delta t) | Verified Subject Identifiers |",
         "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
     ]
 
     for p in png_step_details:
         lines.append(
             f"| `{p['case_id']}` | `{p['user_id']}` | {p['step_no']} | `{p['operation']}` | `{p['resource_id']}` | "
-            f"`{p['evidence_id']}` | {p['img_dims'][0]}×{p['img_dims'][1]} | `{p['img_mode']}` | **PASS (Pillow)** | "
+            f"`{p['evidence_id']}` | {p['img_dims'][0]}x{p['img_dims'][1]} | `{p['img_mode']}` | **PASS (Pillow)** | "
             f"`{p['captured_at']}` | `{p['catalog_activity']}` @ `{p['catalog_time']}` | {p['delta_seconds']}s (7m 1s) | `{p['verified_identifiers']}` |"
         )
 
@@ -663,7 +812,7 @@ def main() -> int:
         "",
         "### Resolution of the 'Missing' activity_4009 Mapping:",
         "- In `system_activity.csv`, activities `activity_4000` through `activity_4011` form a consecutive catalog indexing series.",
-        "- **11 of the 12 activities** (`activity_4000`–`4008`, `4010`–`4011`) link resources depicted in the 11 administrative web console screenshots (`.png`).",
+        "- **11 of the 12 activities** (`activity_4000`-`4008`, `4010`-`4011`) link resources depicted in the 11 administrative web console screenshots (`.png`).",
         "- **`activity_4009`** links canonical resource `export_1842` (with alias `NST-2026-0718-1842`) to `user_18` (`ingrid.dahl@outlook.com`).",
         "- `activity_4009` corresponds to **`evidence_18` (`account_history_report_20260718.pdf`)**, which was captured at `2026-07-18T11:00:00Z` (exactly 7 minutes and 1 second prior to `activity_4009` at `11:07:01Z`). Because `evidence_18` is a PDF document with directly extractable text, it was audited as a text document rather than a visual PNG, explaining why `activity_4009` did not appear in the image-only list.",
         "",

@@ -2,7 +2,7 @@
 
 - **Dataset Evaluated**: `output.csv` against `deletion_requests.csv`
 - **Total Evidence-Bearing Steps Audited**: **1241**
-- **Verification Timestamp**: `2026-10-25T12:27:32.314752`
+- **Verification Timestamp**: `2026-10-25T12:44:02.785696`
 - **Mathematical Reconciliation Status**: **RECONCILED (100.00%)**
 
 ## 1. Population & Methodological Scope
@@ -13,7 +13,7 @@
   2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).
   3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.
   4. *Structural Absence Verification*: Verifies database schema and table presence for snapshot omissions, and explicit 404/deletion events for log/JSON readbacks.
-  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`–`activity_4011`).
+  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).
 
 ## 2. Mutually Exclusive Primary Classification (Sums to 1,241)
 
@@ -26,7 +26,7 @@
 | `ABSENCE_VERIFIED_SNAPSHOT_OMISSION` | 70 | 5.64% | `VERIFY_RECORD_ABSENT` confirmed by omission from complete primary/replica SQL snapshots (68) and JSON bundle (2) |
 | `RESTORE_RISK_EVIDENCE` | 57 | 4.59% | Backup archive restore risks (`ACTIVE`) and verified blocked restore paths (`BLOCKED`) |
 | `VISUAL_CONSOLE_SCREENSHOT` | 11 | 0.89% | Administrative web console screenshots (PNG) verified via Pillow and corroborated by data catalog events |
-| **TOTAL AUDITED POPULATION** | **1241** | **100.00%** | **Reconciliation strictly equals total audited evidence-bearing steps ($\Delta = 0$)** |
+| **TOTAL AUDITED POPULATION** | **1241** | **100.00%** | **Reconciliation strictly equals total audited evidence-bearing steps (delta = 0)** |
 
 ## 3. Secondary & Supplementary Quality Metrics (Counted Separately)
 
@@ -42,23 +42,23 @@
 
 Each of the 11 PNG image evidence files was independently inspected using Pillow and matched against `system_activity.csv` data catalog events:
 
-| Case | User | Step | Operation | Resource ID | Evidence ID | Image Dimensions | Image Mode | Pillow Status | Captured At | Catalog Activity & Time | Interval (Δt) | Verified Subject Identifiers |
+| Case | User | Step | Operation | Resource ID | Evidence ID | Image Dimensions | Image Mode | Pillow Status | Captured At | Catalog Activity & Time | Interval (delta t) | Verified Subject Identifiers |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `case_34` | `user_11` | 1 | `REPORT_REMAINING_RECORD` | `account_5762` | `evidence_04` | 1800×1200 | `RGB` | **PASS (Pillow)** | `2026-09-26T11:00:00Z` | `activity_4000` @ `2026-09-26T11:07:01Z` | 421s (7m 1s) | `user_id=user_11, email=haruka.s1838@zoho.com` |
-| `case_35` | `user_13` | 1 | `REPORT_REMAINING_RECORD` | `search_428` | `evidence_09` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-09-01T06:00:00Z` | `activity_4001` @ `2026-09-01T06:07:01Z` | 421s (7m 1s) | `user_id=user_13, email=g.silva76@gmail.com` |
-| `case_39` | `user_14` | 1 | `REPORT_ACTIVE_DATA_FLOW` | `data_flow_1121` | `evidence_14` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-08-07T08:00:00Z` | `activity_4002` @ `2026-08-07T08:07:01Z` | 421s (7m 1s) | `user_id=user_14, email=jain.aditi@gmail.com` |
-| `case_45` | `user_03` | 1 | `VERIFY_RECORD_PRESENT` | `audit_record_003` | `evidence_37` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-09-05T07:00:00Z` | `activity_4010` @ `2026-09-05T07:07:01Z` | 421s (7m 1s) | `user_id=user_03, email=oliver-bennett@gmail.com` |
-| `case_46` | `user_17` | 1 | `VERIFY_RECORD_REDACTED` | `tombstone_17` | `evidence_42` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-03-10T06:00:00Z` | `activity_4011` @ `2026-03-10T06:07:01Z` | 421s (7m 1s) | `user_id=user_17, email=leonie.g9352@outlook.com` |
-| `case_50` | `user_20` | 1 | `REPORT_EXPOSED_PII` | `analytics_7438` | `evidence_19` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-07-13T10:00:00Z` | `activity_4003` @ `2026-07-13T10:07:01Z` | 421s (7m 1s) | `user_id=user_20, email=darwish.omar@icloud.com` |
-| `case_52` | `user_18` | 1 | `REPORT_REMAINING_RECORD` | `export_1260` | `evidence_23` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-06-18T12:00:00Z` | `activity_4004` @ `2026-06-18T12:07:01Z` | 421s (7m 1s) | `user_id=user_18, email=ingrid.dahl@outlook.com` |
-| `case_53` | `user_22` | 1 | `REPORT_EXPOSED_PII` | `support_1034` | `evidence_28` | 1800×1200 | `RGB` | **PASS (Pillow)** | `2026-05-24T07:00:00Z` | `activity_4005` @ `2026-05-24T07:07:01Z` | 421s (7m 1s) | `user_id=user_22, email=kagyeman8947@fastmail.com` |
-| `case_55` | `user_16` | 1 | `REPORT_RESTORE_RISK` | `backup_9287` | `evidence_32` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-04-29T09:00:00Z` | `activity_4006` @ `2026-04-29T09:07:01Z` | 421s (7m 1s) | `user_id=user_16, email=areed1433@gmail.com` |
-| `case_61` | `user_07` | 1 | `REPORT_REMAINING_RECORD` | `object_19` | `evidence_46` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-02-13T08:00:00Z` | `activity_4007` @ `2026-02-13T08:07:01Z` | 421s (7m 1s) | `user_id=user_07, email=priya.raman@gmail.com` |
-| `case_63` | `user_09` | 1 | `REPORT_REMAINING_RECORD` | `marketing_001` | `evidence_60` | 1500×920 | `RGB` | **PASS (Pillow)** | `2026-09-16T07:20:00Z` | `activity_4008` @ `2026-09-16T07:27:01Z` | 421s (7m 1s) | `user_id=user_09, email=kwame-mensah@proton.me` |
+| `case_34` | `user_11` | 1 | `REPORT_REMAINING_RECORD` | `account_5762` | `evidence_04` | 1800x1200 | `RGB` | **PASS (Pillow)** | `2026-09-26T11:00:00Z` | `activity_4000` @ `2026-09-26T11:07:01Z` | 421s (7m 1s) | `user_id=user_11, email=haruka.s1838@zoho.com` |
+| `case_35` | `user_13` | 1 | `REPORT_REMAINING_RECORD` | `search_428` | `evidence_09` | 1800x1100 | `RGB` | **PASS (Pillow)** | `2026-09-01T06:00:00Z` | `activity_4001` @ `2026-09-01T06:07:01Z` | 421s (7m 1s) | `user_id=user_13, email=g.silva76@gmail.com` |
+| `case_39` | `user_14` | 1 | `REPORT_ACTIVE_DATA_FLOW` | `data_flow_1121` | `evidence_14` | 1800x1150 | `RGB` | **PASS (Pillow)** | `2026-08-07T08:00:00Z` | `activity_4002` @ `2026-08-07T08:07:01Z` | 421s (7m 1s) | `user_id=user_14, email=jain.aditi@gmail.com` |
+| `case_45` | `user_03` | 1 | `VERIFY_RECORD_PRESENT` | `audit_record_003` | `evidence_37` | 1800x1100 | `RGB` | **PASS (Pillow)** | `2026-09-05T07:00:00Z` | `activity_4010` @ `2026-09-05T07:07:01Z` | 421s (7m 1s) | `user_id=user_03, email=oliver-bennett@gmail.com` |
+| `case_46` | `user_17` | 1 | `VERIFY_RECORD_REDACTED` | `tombstone_17` | `evidence_42` | 1800x1100 | `RGB` | **PASS (Pillow)** | `2026-03-10T06:00:00Z` | `activity_4011` @ `2026-03-10T06:07:01Z` | 421s (7m 1s) | `user_id=user_17, email=leonie.g9352@outlook.com` |
+| `case_50` | `user_20` | 1 | `REPORT_EXPOSED_PII` | `analytics_7438` | `evidence_19` | 1800x1150 | `RGB` | **PASS (Pillow)** | `2026-07-13T10:00:00Z` | `activity_4003` @ `2026-07-13T10:07:01Z` | 421s (7m 1s) | `user_id=user_20, email=darwish.omar@icloud.com` |
+| `case_52` | `user_18` | 1 | `REPORT_REMAINING_RECORD` | `export_1260` | `evidence_23` | 1800x1100 | `RGB` | **PASS (Pillow)** | `2026-06-18T12:00:00Z` | `activity_4004` @ `2026-06-18T12:07:01Z` | 421s (7m 1s) | `user_id=user_18, email=ingrid.dahl@outlook.com` |
+| `case_53` | `user_22` | 1 | `REPORT_EXPOSED_PII` | `support_1034` | `evidence_28` | 1800x1200 | `RGB` | **PASS (Pillow)** | `2026-05-24T07:00:00Z` | `activity_4005` @ `2026-05-24T07:07:01Z` | 421s (7m 1s) | `user_id=user_22, email=kagyeman8947@fastmail.com` |
+| `case_55` | `user_16` | 1 | `REPORT_RESTORE_RISK` | `backup_9287` | `evidence_32` | 1800x1150 | `RGB` | **PASS (Pillow)** | `2026-04-29T09:00:00Z` | `activity_4006` @ `2026-04-29T09:07:01Z` | 421s (7m 1s) | `user_id=user_16, email=areed1433@gmail.com` |
+| `case_61` | `user_07` | 1 | `REPORT_REMAINING_RECORD` | `object_19` | `evidence_46` | 1800x1150 | `RGB` | **PASS (Pillow)** | `2026-02-13T08:00:00Z` | `activity_4007` @ `2026-02-13T08:07:01Z` | 421s (7m 1s) | `user_id=user_07, email=priya.raman@gmail.com` |
+| `case_63` | `user_09` | 1 | `REPORT_REMAINING_RECORD` | `marketing_001` | `evidence_60` | 1500x920 | `RGB` | **PASS (Pillow)** | `2026-09-16T07:20:00Z` | `activity_4008` @ `2026-09-16T07:27:01Z` | 421s (7m 1s) | `user_id=user_09, email=kwame-mensah@proton.me` |
 
 ### Resolution of the 'Missing' activity_4009 Mapping:
 - In `system_activity.csv`, activities `activity_4000` through `activity_4011` form a consecutive catalog indexing series.
-- **11 of the 12 activities** (`activity_4000`–`4008`, `4010`–`4011`) link resources depicted in the 11 administrative web console screenshots (`.png`).
+- **11 of the 12 activities** (`activity_4000`-`4008`, `4010`-`4011`) link resources depicted in the 11 administrative web console screenshots (`.png`).
 - **`activity_4009`** links canonical resource `export_1842` (with alias `NST-2026-0718-1842`) to `user_18` (`ingrid.dahl@outlook.com`).
 - `activity_4009` corresponds to **`evidence_18` (`account_history_report_20260718.pdf`)**, which was captured at `2026-07-18T11:00:00Z` (exactly 7 minutes and 1 second prior to `activity_4009` at `11:07:01Z`). Because `evidence_18` is a PDF document with directly extractable text, it was audited as a text document rather than a visual PNG, explaining why `activity_4009` did not appear in the image-only list.
 
