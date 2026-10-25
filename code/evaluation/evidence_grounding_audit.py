@@ -142,32 +142,7 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
     }
     expected_table = table_map.get(system_id)
 
-    target_table = None
-    if expected_table and expected_table in defined_tables:
-        target_table = expected_table
-    else:
-        for tbl in defined_tables:
-            if "customer_data" in tbl or "customer_profiles" in tbl or "search_documents" in tbl:
-                target_table = tbl
-                break
-
-    if target_table is None:
-        return False, f"SQL snapshot schema missing required table for '{system_id}' (expected '{expected_table}')"
-
-    # 1. Parse table definition: check resource_id presence and declared PRIMARY KEY constraint
-    cols_def = defined_tables[target_table]
-    has_res_col = bool(re.search(r"\bresource_id\b", cols_def, re.IGNORECASE))
-    if not has_res_col:
-        return False, f"Table '{target_table}' schema incomplete: missing 'resource_id' column"
-
-    has_pk = bool(
-        re.search(r"\bresource_id\b[^,;]*\bPRIMARY\s+KEY\b", cols_def, re.IGNORECASE)
-        or re.search(r"\bPRIMARY\s+KEY\s*\([^)]*\bresource_id\b[^)]*\)", cols_def, re.IGNORECASE)
-    )
-    if not has_pk:
-        return False, f"Table '{target_table}' schema constraint incomplete: 'resource_id' column is present but not declared as PRIMARY KEY"
-
-    # 2. Strengthen snapshot-completeness validation:
+    # 1. Determine completeness pattern
     # Pattern A: Multi-service inventory snapshot with snapshot_scope table
     is_inventory_complete = False
     if "snapshot_scope" in defined_tables:
@@ -204,17 +179,52 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
     if not (is_inventory_complete or is_topology_complete):
         return False, "SQL snapshot missing recognized completeness indicators (no valid snapshot_scope or replica topology evidence)"
 
-    # 3. Check for resource absence
-    generic_insert = re.findall(rf"INSERT\s+INTO\s+[\"`\[]?{re.escape(target_table)}[\"`\]]?[^;]+;", content, re.IGNORECASE)
-    for stmt in generic_insert:
-        if f"'{resource_id}'" in stmt or f'"{resource_id}"' in stmt:
-            return False, f"Resource '{resource_id}' is PRESENT in table '{target_table}'"
+    # 2. Determine tables to verify for schema, constraints, and absence
+    if is_topology_complete:
+        tables_to_check = topology_tables
+    else:
+        target_table = None
+        if expected_table and expected_table in defined_tables:
+            target_table = expected_table
+        else:
+            for tbl in defined_tables:
+                if "customer_data" in tbl or "customer_profiles" in tbl or "search_documents" in tbl:
+                    target_table = tbl
+                    break
+        if target_table is None:
+            return False, f"SQL snapshot schema missing required table for '{system_id}' (expected '{expected_table}')"
+        tables_to_check = [target_table]
 
-    scope_desc = "inventory snapshot_scope" if is_inventory_complete else "replica topology"
-    if len(generic_insert) == 0:
-        return True, f"Resource '{resource_id}' confirmed ABSENT from empty table '{target_table}' in valid {scope_desc}"
+    # 3. Validate that each table used to substantiate absence has resource_id column and declared PRIMARY KEY constraint
+    for tbl in tables_to_check:
+        cols_def = defined_tables.get(tbl, "")
+        has_res_col = bool(re.search(r"\bresource_id\b", cols_def, re.IGNORECASE))
+        if not has_res_col:
+            return False, f"Table '{tbl}' schema incomplete: missing 'resource_id' column"
 
-    return True, f"Resource '{resource_id}' confirmed ABSENT from table '{target_table}' ({len(generic_insert)} rows verified in valid {scope_desc})"
+        has_pk = bool(
+            re.search(r"\bresource_id\b[^,;]*\bPRIMARY\s+KEY\b", cols_def, re.IGNORECASE)
+            or re.search(r"\bPRIMARY\s+KEY\s*\([^)]*\bresource_id\b[^)]*\)", cols_def, re.IGNORECASE)
+        )
+        if not has_pk:
+            return False, f"Table '{tbl}' schema constraint incomplete: 'resource_id' column is present but not declared as PRIMARY KEY in table '{tbl}'"
+
+    # 4. Check for resource absence across every table in tables_to_check
+    total_rows = 0
+    for tbl in tables_to_check:
+        tbl_inserts = re.findall(rf"INSERT\s+INTO\s+[\"`\[]?{re.escape(tbl)}[\"`\]]?[^;]+;", content, re.IGNORECASE)
+        total_rows += len(tbl_inserts)
+        for stmt in tbl_inserts:
+            if f"'{resource_id}'" in stmt or f'"{resource_id}"' in stmt:
+                return False, f"Resource '{resource_id}' is PRESENT in table '{tbl}'"
+
+    if is_topology_complete:
+        return True, f"Resource '{resource_id}' confirmed ABSENT across all {len(tables_to_check)} topology tables ({', '.join(tables_to_check)}) ({total_rows} rows verified in valid replica topology)"
+    else:
+        target_table = tables_to_check[0]
+        if total_rows == 0:
+            return True, f"Resource '{resource_id}' confirmed ABSENT from empty table '{target_table}' in valid inventory snapshot_scope"
+        return True, f"Resource '{resource_id}' confirmed ABSENT from table '{target_table}' ({total_rows} rows verified in valid inventory snapshot_scope)"
 
 
 # =========================================================================
@@ -360,7 +370,7 @@ def verify_png_catalog(
 
 
 # =========================================================================
-# Unit Test Suite for Absence and Evidence Verification (29 Scenarios)
+# Unit Test Suite for Absence and Evidence Verification (31 Scenarios)
 # =========================================================================
 def run_unit_tests() -> dict:
     print("=" * 78)
@@ -412,7 +422,7 @@ def run_unit_tests() -> dict:
         tests.append(("TEST_JSON_05_RESOURCE_ABSENT", "JSON Snapshot", "Verifies absence when resource is omitted from target collection", test_json_05))
 
         # -------------------------------------------------------------
-        # Category 2: SQL Snapshot Completeness & Absence (10 tests)
+        # Category 2: SQL Snapshot Completeness & Absence (12 tests)
         # -------------------------------------------------------------
         def test_sql_01():
             p = td / "empty.sql"
@@ -517,6 +527,34 @@ def run_unit_tests() -> dict:
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
             assert not ok and "lacks explicit, valid database topology metadata header" in msg
         tests.append(("TEST_SQL_10_TOPOLOGY_RECORDS_ONLY", "SQL Snapshot", "Rejects snapshot with relevant record INSERT but missing topology header", test_sql_10))
+
+        def test_sql_11():
+            p = td / "replica_only_present.sql"
+            p.write_text("""
+            -- Ghost Data Still Exists: point-in-time database snapshot
+            -- Database topology: read_replica
+            CREATE TABLE customer_data_primary (resource_id TEXT PRIMARY KEY, record_json TEXT);
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, record_json TEXT);
+            INSERT INTO customer_data_primary VALUES ('acc_other', '{}');
+            INSERT INTO customer_data_read_replica VALUES ('acc_1', '{}');
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "Resource 'acc_1' is PRESENT in table 'customer_data_read_replica'" in msg
+        tests.append(("TEST_SQL_11_RESOURCE_PRESENT_REPLICA_ONLY", "SQL Snapshot", "Rejects absence claim when resource is absent in primary but present in replica", test_sql_11))
+
+        def test_sql_12():
+            p = td / "primary_only_present.sql"
+            p.write_text("""
+            -- Ghost Data Still Exists: point-in-time database snapshot
+            -- Database topology: read_replica
+            CREATE TABLE customer_data_primary (resource_id TEXT PRIMARY KEY, record_json TEXT);
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, record_json TEXT);
+            INSERT INTO customer_data_primary VALUES ('acc_1', '{}');
+            INSERT INTO customer_data_read_replica VALUES ('acc_other', '{}');
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "Resource 'acc_1' is PRESENT in table 'customer_data_primary'" in msg
+        tests.append(("TEST_SQL_12_RESOURCE_PRESENT_PRIMARY_ONLY", "SQL Snapshot", "Rejects absence claim when resource is present in primary and absent in replica", test_sql_12))
 
         # -------------------------------------------------------------
         # Category 3: Genuine Event Timestamp Deletion Verification (8 tests)
@@ -944,20 +982,20 @@ def main() -> int:
         "  1. *File Existence & Binary Integrity*: Every cited file exists, is mapped in `evidence_files.csv`, and parses validly.",
         "  2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).",
         "  3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.",
-        "  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint, snapshot completeness (covering snapshot_scope with service records, and replica topology metadata accompanied by targeted record INSERTs), and explicit resource absence across rows, alongside 404/deletion events for log/JSON readbacks.",
+        "  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint across all snapshot tables, snapshot completeness (covering snapshot_scope with service records, and replica topology metadata accompanied by targeted record INSERTs), and replica-wide resource absence across all primary/replica tables, alongside 404/deletion events for log/JSON readbacks.",
         "  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).",
         "",
-        "## 2. Programmatic Unit Test Suite (29 Named Scenarios)",
+        "## 2. Programmatic Unit Test Suite (31 Named Scenarios)",
         "",
-        "All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 29-scenario programmatic test suite:",
+        "All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 31-scenario programmatic test suite:",
         "",
         "| Test Category | Scenarios Executed | Status | Coverage & Validation Invariants |",
         "| :--- | ---: | :---: | :--- |",
         "| **JSON Snapshot Absence** | 5 | **PASS (5/5)** | Malformed syntax, non-dict root, missing target collection, resource presence rejection, confirmed omission |",
-        "| **SQL Snapshot Completeness** | 10 | **PASS (10/10)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology, topology header without record INSERTs rejection, topology record INSERTs without header rejection |",
+        "| **SQL Snapshot Completeness** | 12 | **PASS (12/12)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology, topology header without record INSERTs rejection, topology record INSERTs without header rejection, replica-only presence rejection, primary-only presence rejection |",
         "| **Genuine Event Timestamps** | 8 | **PASS (8/8)** | Ordinary non-deletion mention, missing event timestamp rejection, file-level `exported_at` fallback rejection, post-cutoff event rejection, valid 404 readback with `observed_at`, valid `recorded_at`, valid `purged_at`, valid inline log timestamp |",
         "| **PNG Console & Catalog** | 6 | **PASS (6/6)** | Pillow RGB format/integrity, missing `user_id` rejection, missing registered email rejection, post-cutoff catalog rejection, interval > 600s rejection, corrupt PNG rejection |",
-        "| **TOTAL TEST POPULATION** | **29** | **100% PASS** | **All 29 independent scenarios executed programmatically (0 failures)** |",
+        "| **TOTAL TEST POPULATION** | **31** | **100% PASS** | **All 31 independent scenarios executed programmatically (0 failures)** |",
         "",
         "## 3. Mutually Exclusive Primary Classification (Sums to 1,241)",
         "",
