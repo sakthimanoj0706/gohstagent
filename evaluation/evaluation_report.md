@@ -147,11 +147,11 @@ During iterative development and regression testing, several key edge cases were
      - `NOT_APPLICABLE`: 10 (1.93%)
    - **Detected Anomalies**: **0 anomalies** across all 18 independent checks.
 
-2. **Source-Evidence Grounding & Mathematical Reconciliation (`evidence_grounding_audit.py`)**:
+2. **Source-Evidence Grounding & Methodological Reconciliation (`evidence_grounding_audit.py`)**:
    - Total evidence-bearing steps audited: **1,241** (728 `FINDING` steps in `INCOMPLETE` cases + 513 `VERIFICATION` steps in `COMPLETE` cases; remaining 1,985 steps represent future actions with `evidence_id=""`)
    - Resource IDs grounded directly in source text: **1,160** (93.47%)
-   - Absence verified by database snapshot omission: **70** (5.64%)
-   - Visual administrative console screenshots (PNG): **11** (0.89%)
+   - Absence verified by complete SQL snapshots (68) and JSON bundle (2): **70** (5.64%)
+   - Visual administrative console screenshots (PNG) verified via Pillow and data catalog: **11** (0.89%)
    - **Mathematical Reconciliation**: $1,160 + 70 + 11 = 1,241$ ($\Delta = 0$, 100.00% accounted for)
    - **Mutually Exclusive Primary Categories**:
      - `RESOURCE_PRESENCE_GROUNDED`: 581 (46.82%)
@@ -161,6 +161,13 @@ During iterative development and regression testing, several key edge cases were
      - `ABSENCE_VERIFIED_SNAPSHOT_OMISSION`: 70 (5.64%)
      - `RESTORE_RISK_EVIDENCE`: 57 (4.59%)
      - `VISUAL_CONSOLE_SCREENSHOT`: 11 (0.89%)
+   - **Absence Verification Methodology**:
+     - 70 snapshot-omission steps verified against complete SQL schemas (tables present, records omitted) and JSON bundle collections.
+     - 78 deletion-log steps verified against explicit status 404 readbacks, rows=0, or deletion/closure events.
+   - **Visual Evidence & Catalog Series (`activity_4000`–`4011`)**:
+     - All 11 PNG screenshots verified via Pillow (`img.verify()`, format `PNG`, dimensions > 0) and matched to companion catalog events (`activity_4000`–`4008`, `4010`–`4011`) connecting resource and user prior to `audit_at`.
+     - `activity_4009` in `system_activity.csv` connects `export_1842` (`NST-2026-0718-1842`) to `user_18` for `evidence_18` (`account_history_report_20260718.pdf`), which was parsed as a PDF text document.
+     - Automated checks cover Pillow binary integrity, format, dimensions, timestamps, and catalog linkage; semantic on-screen visual confirmation is documented as manual visual inspection.
    - Non-absence resource claims missing from source: **0**
    - Citations captured after `audit_at`: **0**
    - Unknown or fabricated evidence IDs: **0**
