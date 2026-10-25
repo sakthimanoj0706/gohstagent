@@ -2,7 +2,7 @@
 
 - **Dataset Evaluated**: `output.csv` against `deletion_requests.csv`
 - **Total Evidence-Bearing Steps Audited**: **1241**
-- **Verification Timestamp**: `2026-10-25T14:18:09.158405`
+- **Verification Timestamp**: `2026-10-25T14:38:10.503338`
 - **Mathematical Reconciliation Status**: **RECONCILED (100.00%)**
 
 ## 1. Population & Methodological Scope
@@ -12,20 +12,20 @@
   1. *File Existence & Binary Integrity*: Every cited file exists, is mapped in `evidence_files.csv`, and parses validly.
   2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).
   3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.
-  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint, snapshot completeness (covering snapshot_scope or topology metadata), and explicit resource absence across rows, alongside 404/deletion events for log/JSON readbacks.
+  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint, snapshot completeness (covering snapshot_scope with service records, and replica topology metadata accompanied by targeted record INSERTs), and explicit resource absence across rows, alongside 404/deletion events for log/JSON readbacks.
   5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).
 
-## 2. Programmatic Unit Test Suite (27 Named Scenarios)
+## 2. Programmatic Unit Test Suite (29 Named Scenarios)
 
-All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 27-scenario programmatic test suite:
+All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 29-scenario programmatic test suite:
 
 | Test Category | Scenarios Executed | Status | Coverage & Validation Invariants |
 | :--- | ---: | :---: | :--- |
 | **JSON Snapshot Absence** | 5 | **PASS (5/5)** | Malformed syntax, non-dict root, missing target collection, resource presence rejection, confirmed omission |
-| **SQL Snapshot Completeness** | 8 | **PASS (8/8)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology |
+| **SQL Snapshot Completeness** | 10 | **PASS (10/10)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology, topology header without record INSERTs rejection, topology record INSERTs without header rejection |
 | **Genuine Event Timestamps** | 8 | **PASS (8/8)** | Ordinary non-deletion mention, missing event timestamp rejection, file-level `exported_at` fallback rejection, post-cutoff event rejection, valid 404 readback with `observed_at`, valid `recorded_at`, valid `purged_at`, valid inline log timestamp |
 | **PNG Console & Catalog** | 6 | **PASS (6/6)** | Pillow RGB format/integrity, missing `user_id` rejection, missing registered email rejection, post-cutoff catalog rejection, interval > 600s rejection, corrupt PNG rejection |
-| **TOTAL TEST POPULATION** | **27** | **100% PASS** | **All 27 independent scenarios executed programmatically (0 failures)** |
+| **TOTAL TEST POPULATION** | **29** | **100% PASS** | **All 29 independent scenarios executed programmatically (0 failures)** |
 
 ## 3. Mutually Exclusive Primary Classification (Sums to 1,241)
 

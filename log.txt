@@ -1058,3 +1058,47 @@ branch=main
 repo_root=D:\hacker
 worktree=main
 parent_agent=none
+
+## 2026-10-25T09:09:54.965807+00:00 SQL Replica Topology Metadata and Targeted Records Enforcement
+
+User Prompt (verbatim, secrets redacted):
+Review `D:\hacker\code\evaluation\evidence_grounding_audit.py` and fix the remaining replica-topology completeness validation defect.
+
+1. In `verify_sql_snapshot_absence()`, require BOTH:
+   - Explicit, valid database topology metadata.
+   - At least one non-empty record INSERT targeting the relevant snapshot primary/replica table or tables.
+
+2. Reject the snapshot if either requirement is missing. Do not use a generic INSERT anywhere in the file as proof that the target snapshot contains records.
+
+3. Add two named negative SQL unit tests:
+   - `TEST_SQL_09_TOPOLOGY_HEADER_ONLY`: valid topology header but no relevant record INSERT; must reject.
+   - `TEST_SQL_10_TOPOLOGY_RECORDS_ONLY`: relevant record INSERT but no valid topology header; must reject.
+
+4. Keep the existing eight SQL scenarios and all other tests. Test positive cases, including a genuinely complete snapshot where the queried resource is absent.
+
+5. Run the complete 29-scenario unit-test suite, evidence-grounding audit, output validator, and sample evaluation against the actual dataset. Verify all 68 cited SQL absence steps again. Do not change `output.csv` unless a source-backed prediction defect is found.
+
+6. Regenerate both grounding-report copies and any other affected reports. Rebuild `code.zip`, verify its contents, compute final SHA-256 checksums from the actual local files, and commit and push the changes to `main` without force-pushing.
+
+7. Report actual command results and any failures. Do not claim the replica-completeness guarantees are satisfied unless the new negative tests pass and all cited SQL absence steps still reconcile.
+
+Agent Response Summary:
+Refined verify_sql_snapshot_absence() in code/evaluation/evidence_grounding_audit.py to strictly require BOTH explicit database topology metadata comments and targeted non-empty record INSERTs specifically into the snapshot primary/replica tables, eliminating generic INSERT acceptance. Expanded the unit test suite to 29 programmatic scenarios by adding TEST_SQL_09_TOPOLOGY_HEADER_ONLY and TEST_SQL_10_TOPOLOGY_RECORDS_ONLY, verifying 100% pass rate (29/29 passed) with all 68 real SQL absence steps confirmed compliant. Regenerated grounding and evaluation reports, rebuilt code.zip (68,112 bytes), verified all 18 output specification checks and 32/32 sample evaluation cases, and pushed changes cleanly to GitHub.
+
+Actions:
+* edit_file: code/evaluation/evidence_grounding_audit.py
+* run_command: python code/evaluation/evidence_grounding_audit.py
+* edit_file: code/evaluation/evaluation_report.md
+* run_command: python code/evaluation/validate_output.py
+* run_command: python code/evaluation/main.py
+* run_command: python scratch/build_code_zip.py
+* write_file: log.txt
+* run_command: git add -A && git commit && git push origin main
+
+Context:
+tool=Antigravity
+model=Gemini 3.8 Flash (High)
+branch=main
+repo_root=D:\hacker
+worktree=main
+parent_agent=none

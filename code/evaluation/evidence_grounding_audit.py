@@ -181,13 +181,24 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
 
     # Pattern B: Replica topology snapshot
     is_topology_complete = False
-    has_topology_tables = any("replica" in tbl or "primary" in tbl for tbl in defined_tables)
-    has_topology_header = any("Database topology:" in line or "replication drift" in line for line in content.splitlines()[:10])
-    generic_inserts = re.findall(r"INSERT\s+INTO\s+", content, re.IGNORECASE)
+    topology_tables = [tbl for tbl in defined_tables if "replica" in tbl or "primary" in tbl]
+    if topology_tables:
+        has_topology_header = any(
+            "Database topology:" in line or "replication drift" in line
+            for line in content.splitlines()[:10]
+        )
+        targeted_record_inserts = []
+        for tbl in topology_tables:
+            ins = re.findall(rf"INSERT\s+INTO\s+[\"`\[]?{re.escape(tbl)}[\"`\]]?[^;]+;", content, re.IGNORECASE)
+            targeted_record_inserts.extend(ins)
 
-    if has_topology_tables:
-        if not has_topology_header and len(generic_inserts) == 0:
+        if not has_topology_header and not targeted_record_inserts:
             return False, "SQL snapshot with replica-named table lacks topology metadata and record evidence"
+        if not has_topology_header:
+            return False, "SQL snapshot with replica-named table lacks explicit, valid database topology metadata header"
+        if not targeted_record_inserts:
+            return False, "SQL snapshot with replica topology metadata lacks non-empty record INSERT targeting relevant primary/replica tables"
+
         is_topology_complete = True
 
     if not (is_inventory_complete or is_topology_complete):
@@ -349,7 +360,7 @@ def verify_png_catalog(
 
 
 # =========================================================================
-# Unit Test Suite for Absence and Evidence Verification (27 Scenarios)
+# Unit Test Suite for Absence and Evidence Verification (29 Scenarios)
 # =========================================================================
 def run_unit_tests() -> dict:
     print("=" * 78)
@@ -401,7 +412,7 @@ def run_unit_tests() -> dict:
         tests.append(("TEST_JSON_05_RESOURCE_ABSENT", "JSON Snapshot", "Verifies absence when resource is omitted from target collection", test_json_05))
 
         # -------------------------------------------------------------
-        # Category 2: SQL Snapshot Completeness & Absence (8 tests)
+        # Category 2: SQL Snapshot Completeness & Absence (10 tests)
         # -------------------------------------------------------------
         def test_sql_01():
             p = td / "empty.sql"
@@ -483,6 +494,29 @@ def run_unit_tests() -> dict:
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
             assert ok and "confirmed ABSENT" in msg
         tests.append(("TEST_SQL_08_ABSENT_VALID", "SQL Snapshot", "Verifies genuine absence in complete snapshot with verified topology and record evidence", test_sql_08))
+
+        def test_sql_09():
+            p = td / "header_only.sql"
+            p.write_text("""
+            -- Ghost Data Still Exists: point-in-time database snapshot
+            -- Database topology: read_replica
+            CREATE TABLE customer_data_primary (resource_id TEXT PRIMARY KEY, name TEXT);
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "lacks non-empty record INSERT targeting relevant primary/replica tables" in msg
+        tests.append(("TEST_SQL_09_TOPOLOGY_HEADER_ONLY", "SQL Snapshot", "Rejects snapshot with valid topology header but no relevant record INSERT", test_sql_09))
+
+        def test_sql_10():
+            p = td / "records_only.sql"
+            p.write_text("""
+            CREATE TABLE customer_data_primary (resource_id TEXT PRIMARY KEY, name TEXT);
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
+            INSERT INTO customer_data_read_replica VALUES ('acc_2', 'Bob');
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "lacks explicit, valid database topology metadata header" in msg
+        tests.append(("TEST_SQL_10_TOPOLOGY_RECORDS_ONLY", "SQL Snapshot", "Rejects snapshot with relevant record INSERT but missing topology header", test_sql_10))
 
         # -------------------------------------------------------------
         # Category 3: Genuine Event Timestamp Deletion Verification (8 tests)
@@ -910,20 +944,20 @@ def main() -> int:
         "  1. *File Existence & Binary Integrity*: Every cited file exists, is mapped in `evidence_files.csv`, and parses validly.",
         "  2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).",
         "  3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.",
-        "  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint, snapshot completeness (covering snapshot_scope or topology metadata), and explicit resource absence across rows, alongside 404/deletion events for log/JSON readbacks.",
+        "  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint, snapshot completeness (covering snapshot_scope with service records, and replica topology metadata accompanied by targeted record INSERTs), and explicit resource absence across rows, alongside 404/deletion events for log/JSON readbacks.",
         "  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).",
         "",
-        "## 2. Programmatic Unit Test Suite (27 Named Scenarios)",
+        "## 2. Programmatic Unit Test Suite (29 Named Scenarios)",
         "",
-        "All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 27-scenario programmatic test suite:",
+        "All absence verification, completeness checks, genuine event timing, and image forensic functions are independently validated by a dedicated 29-scenario programmatic test suite:",
         "",
         "| Test Category | Scenarios Executed | Status | Coverage & Validation Invariants |",
         "| :--- | ---: | :---: | :--- |",
         "| **JSON Snapshot Absence** | 5 | **PASS (5/5)** | Malformed syntax, non-dict root, missing target collection, resource presence rejection, confirmed omission |",
-        "| **SQL Snapshot Completeness** | 8 | **PASS (8/8)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology |",
+        "| **SQL Snapshot Completeness** | 10 | **PASS (10/10)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology, topology header without record INSERTs rejection, topology record INSERTs without header rejection |",
         "| **Genuine Event Timestamps** | 8 | **PASS (8/8)** | Ordinary non-deletion mention, missing event timestamp rejection, file-level `exported_at` fallback rejection, post-cutoff event rejection, valid 404 readback with `observed_at`, valid `recorded_at`, valid `purged_at`, valid inline log timestamp |",
         "| **PNG Console & Catalog** | 6 | **PASS (6/6)** | Pillow RGB format/integrity, missing `user_id` rejection, missing registered email rejection, post-cutoff catalog rejection, interval > 600s rejection, corrupt PNG rejection |",
-        "| **TOTAL TEST POPULATION** | **27** | **100% PASS** | **All 27 independent scenarios executed programmatically (0 failures)** |",
+        "| **TOTAL TEST POPULATION** | **29** | **100% PASS** | **All 29 independent scenarios executed programmatically (0 failures)** |",
         "",
         "## 3. Mutually Exclusive Primary Classification (Sums to 1,241)",
         "",
