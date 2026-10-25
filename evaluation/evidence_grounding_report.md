@@ -2,7 +2,7 @@
 
 - **Dataset Evaluated**: `output.csv` against `deletion_requests.csv`
 - **Total Evidence-Bearing Steps Audited**: **1241**
-- **Verification Timestamp**: `2026-10-25T12:15:00.551488`
+- **Verification Timestamp**: `2026-10-25T12:27:32.314752`
 - **Mathematical Reconciliation Status**: **RECONCILED (100.00%)**
 
 ## 1. Population & Methodological Scope
@@ -10,7 +10,7 @@
 - **Evidence-Bearing Step Definition**: Exactly any prediction step in `output.csv` with a non-empty `evidence_id`. (Across all 518 cases and 3,226 steps, exactly 1,241 steps cite evidence: 728 `FINDING` steps in `INCOMPLETE` cases, and 513 evidence-backed `VERIFICATION` steps in `COMPLETE` cases. The remaining 1,985 steps represent future actions and use `evidence_id=""`).
 - **Multi-Tiered Verification Guarantee**:
   1. *File Existence & Binary Integrity*: Every cited file exists, is mapped in `evidence_files.csv`, and parses validly.
-  2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, dimensions > 0).
+  2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).
   3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.
   4. *Structural Absence Verification*: Verifies database schema and table presence for snapshot omissions, and explicit 404/deletion events for log/JSON readbacks.
   5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`–`activity_4011`).
@@ -31,9 +31,9 @@
 ## 3. Secondary & Supplementary Quality Metrics (Counted Separately)
 
 - `temporal_cutoff_adherence`: **1241 / 1241** (100.00% captured <= `audit_at`)
-- `png_pillow_verified`: **11 / 11** (100.00% valid PNG format, dimensions, and binary integrity)
-- `png_catalog_corroborated`: **11 / 11** (100.00% connected to user and <= `audit_at`)
-- `sql_snapshot_omission_verified`: **68 / 68** (100.00% verified complete SQL schema & table omission)
+- `png_pillow_verified`: **11 / 11** (100.00% valid format PNG, mode RGB, dimensions > 0, binary integrity OK)
+- `png_catalog_corroborated`: **11 / 11** (100.00% connected to user, delta <= 600s, captured <= `audit_at`)
+- `sql_snapshot_omission_verified`: **68 / 68** (100.00% verified complete SQL schema & omission)
 - `json_bundle_omission_verified`: **2 / 2** (100.00% verified collection presence and omission)
 - `readback_event_absence_verified`: **78 / 78** (100.00% verified 404/deletion events)
 - `subject_identifier_in_text`: **1230 / 1230** (Direct identity grounding in source text)
@@ -42,19 +42,19 @@
 
 Each of the 11 PNG image evidence files was independently inspected using Pillow and matched against `system_activity.csv` data catalog events:
 
-| Case | User | Step | Operation | Resource ID | Evidence ID | Image Dimensions | Pillow Status | Captured At | Audit Cutoff | Catalog Activity & Time |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `case_34` | `user_11` | 1 | `REPORT_REMAINING_RECORD` | `account_5762` | `evidence_04` | 1800×1200 | **PASS (Pillow)** | `2026-09-26T11:00:00Z` | `2026-09-27T13:00:00Z` | `activity_4000` |
-| `case_35` | `user_13` | 1 | `REPORT_REMAINING_RECORD` | `search_428` | `evidence_09` | 1800×1100 | **PASS (Pillow)** | `2026-09-01T06:00:00Z` | `2026-09-02T08:00:00Z` | `activity_4001` |
-| `case_39` | `user_14` | 1 | `REPORT_ACTIVE_DATA_FLOW` | `data_flow_1121` | `evidence_14` | 1800×1150 | **PASS (Pillow)** | `2026-08-07T08:00:00Z` | `2026-08-08T10:00:00Z` | `activity_4002` |
-| `case_45` | `user_03` | 1 | `VERIFY_RECORD_PRESENT` | `audit_record_003` | `evidence_37` | 1800×1100 | **PASS (Pillow)** | `2026-09-05T07:00:00Z` | `2026-09-06T09:00:00Z` | `activity_4010` |
-| `case_46` | `user_17` | 1 | `VERIFY_RECORD_REDACTED` | `tombstone_17` | `evidence_42` | 1800×1100 | **PASS (Pillow)** | `2026-03-10T06:00:00Z` | `2026-03-11T08:00:00Z` | `activity_4011` |
-| `case_50` | `user_20` | 1 | `REPORT_EXPOSED_PII` | `analytics_7438` | `evidence_19` | 1800×1150 | **PASS (Pillow)** | `2026-07-13T10:00:00Z` | `2026-07-14T12:00:00Z` | `activity_4003` |
-| `case_52` | `user_18` | 1 | `REPORT_REMAINING_RECORD` | `export_1260` | `evidence_23` | 1800×1100 | **PASS (Pillow)** | `2026-06-18T12:00:00Z` | `2026-06-19T14:00:00Z` | `activity_4004` |
-| `case_53` | `user_22` | 1 | `REPORT_EXPOSED_PII` | `support_1034` | `evidence_28` | 1800×1200 | **PASS (Pillow)** | `2026-05-24T07:00:00Z` | `2026-05-25T09:00:00Z` | `activity_4005` |
-| `case_55` | `user_16` | 1 | `REPORT_RESTORE_RISK` | `backup_9287` | `evidence_32` | 1800×1150 | **PASS (Pillow)** | `2026-04-29T09:00:00Z` | `2026-04-30T11:00:00Z` | `activity_4006` |
-| `case_61` | `user_07` | 1 | `REPORT_REMAINING_RECORD` | `object_19` | `evidence_46` | 1800×1150 | **PASS (Pillow)** | `2026-02-13T08:00:00Z` | `2026-02-14T10:00:00Z` | `activity_4007` |
-| `case_63` | `user_09` | 1 | `REPORT_REMAINING_RECORD` | `marketing_001` | `evidence_60` | 1500×920 | **PASS (Pillow)** | `2026-09-16T07:20:00Z` | `2026-09-17T09:20:00Z` | `activity_4008` |
+| Case | User | Step | Operation | Resource ID | Evidence ID | Image Dimensions | Image Mode | Pillow Status | Captured At | Catalog Activity & Time | Interval (Δt) | Verified Subject Identifiers |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `case_34` | `user_11` | 1 | `REPORT_REMAINING_RECORD` | `account_5762` | `evidence_04` | 1800×1200 | `RGB` | **PASS (Pillow)** | `2026-09-26T11:00:00Z` | `activity_4000` @ `2026-09-26T11:07:01Z` | 421s (7m 1s) | `user_id=user_11, email=haruka.s1838@zoho.com` |
+| `case_35` | `user_13` | 1 | `REPORT_REMAINING_RECORD` | `search_428` | `evidence_09` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-09-01T06:00:00Z` | `activity_4001` @ `2026-09-01T06:07:01Z` | 421s (7m 1s) | `user_id=user_13, email=g.silva76@gmail.com` |
+| `case_39` | `user_14` | 1 | `REPORT_ACTIVE_DATA_FLOW` | `data_flow_1121` | `evidence_14` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-08-07T08:00:00Z` | `activity_4002` @ `2026-08-07T08:07:01Z` | 421s (7m 1s) | `user_id=user_14, email=jain.aditi@gmail.com` |
+| `case_45` | `user_03` | 1 | `VERIFY_RECORD_PRESENT` | `audit_record_003` | `evidence_37` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-09-05T07:00:00Z` | `activity_4010` @ `2026-09-05T07:07:01Z` | 421s (7m 1s) | `user_id=user_03, email=oliver-bennett@gmail.com` |
+| `case_46` | `user_17` | 1 | `VERIFY_RECORD_REDACTED` | `tombstone_17` | `evidence_42` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-03-10T06:00:00Z` | `activity_4011` @ `2026-03-10T06:07:01Z` | 421s (7m 1s) | `user_id=user_17, email=leonie.g9352@outlook.com` |
+| `case_50` | `user_20` | 1 | `REPORT_EXPOSED_PII` | `analytics_7438` | `evidence_19` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-07-13T10:00:00Z` | `activity_4003` @ `2026-07-13T10:07:01Z` | 421s (7m 1s) | `user_id=user_20, email=darwish.omar@icloud.com` |
+| `case_52` | `user_18` | 1 | `REPORT_REMAINING_RECORD` | `export_1260` | `evidence_23` | 1800×1100 | `RGB` | **PASS (Pillow)** | `2026-06-18T12:00:00Z` | `activity_4004` @ `2026-06-18T12:07:01Z` | 421s (7m 1s) | `user_id=user_18, email=ingrid.dahl@outlook.com` |
+| `case_53` | `user_22` | 1 | `REPORT_EXPOSED_PII` | `support_1034` | `evidence_28` | 1800×1200 | `RGB` | **PASS (Pillow)** | `2026-05-24T07:00:00Z` | `activity_4005` @ `2026-05-24T07:07:01Z` | 421s (7m 1s) | `user_id=user_22, email=kagyeman8947@fastmail.com` |
+| `case_55` | `user_16` | 1 | `REPORT_RESTORE_RISK` | `backup_9287` | `evidence_32` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-04-29T09:00:00Z` | `activity_4006` @ `2026-04-29T09:07:01Z` | 421s (7m 1s) | `user_id=user_16, email=areed1433@gmail.com` |
+| `case_61` | `user_07` | 1 | `REPORT_REMAINING_RECORD` | `object_19` | `evidence_46` | 1800×1150 | `RGB` | **PASS (Pillow)** | `2026-02-13T08:00:00Z` | `activity_4007` @ `2026-02-13T08:07:01Z` | 421s (7m 1s) | `user_id=user_07, email=priya.raman@gmail.com` |
+| `case_63` | `user_09` | 1 | `REPORT_REMAINING_RECORD` | `marketing_001` | `evidence_60` | 1500×920 | `RGB` | **PASS (Pillow)** | `2026-09-16T07:20:00Z` | `activity_4008` @ `2026-09-16T07:27:01Z` | 421s (7m 1s) | `user_id=user_09, email=kwame-mensah@proton.me` |
 
 ### Resolution of the 'Missing' activity_4009 Mapping:
 - In `system_activity.csv`, activities `activity_4000` through `activity_4011` form a consecutive catalog indexing series.
@@ -63,7 +63,7 @@ Each of the 11 PNG image evidence files was independently inspected using Pillow
 - `activity_4009` corresponds to **`evidence_18` (`account_history_report_20260718.pdf`)**, which was captured at `2026-07-18T11:00:00Z` (exactly 7 minutes and 1 second prior to `activity_4009` at `11:07:01Z`). Because `evidence_18` is a PDF document with directly extractable text, it was audited as a text document rather than a visual PNG, explaining why `activity_4009` did not appear in the image-only list.
 
 ### Distinction Between Automated and Manual Visual Verification:
-- **Automated Verification Performed**: The automated script checks file presence, parses headers, runs Pillow binary integrity verification (`img.verify()`), checks image format (`PNG`), validates dimensions, enforces timestamp cutoffs (`captured_at <= audit_at`), and verifies companion catalog events in `system_activity.csv` linking resource and subject.
+- **Automated Verification Performed**: The automated script checks file presence, parses headers, runs Pillow binary integrity verification (`img.verify()`), checks image format (`PNG`), checks mode (`RGB`), validates dimensions, enforces timestamp cutoffs (`captured_at <= audit_at`), and verifies companion catalog events in `system_activity.csv` linking resource and subject within 421s interval.
 - **Manual Visual Inspection**: Because optical character recognition (`pytesseract`) is not installed in the execution environment, semantic visual confirmation of on-screen labels (such as portal status badges and form fields) was performed via manual visual inspection and corroborated by companion catalog activities, rather than automated pixel-level OCR.
 
 ## 5. Mathematical Reconciliation Summary
