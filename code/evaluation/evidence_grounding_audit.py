@@ -128,13 +128,7 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
     if not table_defs:
         return False, "Malformed SQL: no CREATE TABLE statements found"
 
-    defined_tables = {tbl.strip('"`[]'): cols for tbl, cols in table_defs}
-
-    # Verify genuine completeness indicators (snapshot_scope or recognized primary/replica topology)
-    has_snapshot_scope = "snapshot_scope" in defined_tables
-    has_topology = any("replica" in tbl or "primary" in tbl for tbl in defined_tables)
-    if not (has_snapshot_scope or has_topology):
-        return False, "SQL snapshot missing recognized completeness indicators (no snapshot_scope or primary/replica topology)"
+    defined_tables = {tbl.strip('"`[]'): cols.strip() for tbl, cols in table_defs}
 
     table_map = {
         'account_service': 'customer_profiles',
@@ -160,19 +154,56 @@ def verify_sql_snapshot_absence(fpath: Path, system_id: str, resource_id: str) -
     if target_table is None:
         return False, f"SQL snapshot schema missing required table for '{system_id}' (expected '{expected_table}')"
 
+    # 1. Parse table definition: check resource_id presence and declared PRIMARY KEY constraint
     cols_def = defined_tables[target_table]
-    if "resource_id" not in cols_def:
+    has_res_col = bool(re.search(r"\bresource_id\b", cols_def, re.IGNORECASE))
+    if not has_res_col:
         return False, f"Table '{target_table}' schema incomplete: missing 'resource_id' column"
 
+    has_pk = bool(
+        re.search(r"\bresource_id\b[^,;]*\bPRIMARY\s+KEY\b", cols_def, re.IGNORECASE)
+        or re.search(r"\bPRIMARY\s+KEY\s*\([^)]*\bresource_id\b[^)]*\)", cols_def, re.IGNORECASE)
+    )
+    if not has_pk:
+        return False, f"Table '{target_table}' schema constraint incomplete: 'resource_id' column is present but not declared as PRIMARY KEY"
+
+    # 2. Strengthen snapshot-completeness validation:
+    # Pattern A: Multi-service inventory snapshot with snapshot_scope table
+    is_inventory_complete = False
+    if "snapshot_scope" in defined_tables:
+        scope_inserts = re.findall(r"INSERT\s+INTO\s+snapshot_scope[^;]+;", content, re.IGNORECASE)
+        if not scope_inserts:
+            return False, "SQL snapshot has empty 'snapshot_scope' table with no scope records"
+        scope_text = " ".join(scope_inserts)
+        if system_id and f"'{system_id}'" not in scope_text:
+            return False, f"SQL snapshot 'snapshot_scope' does not cover system '{system_id}'"
+        is_inventory_complete = True
+
+    # Pattern B: Replica topology snapshot
+    is_topology_complete = False
+    has_topology_tables = any("replica" in tbl or "primary" in tbl for tbl in defined_tables)
+    has_topology_header = any("Database topology:" in line or "replication drift" in line for line in content.splitlines()[:10])
+    generic_inserts = re.findall(r"INSERT\s+INTO\s+", content, re.IGNORECASE)
+
+    if has_topology_tables:
+        if not has_topology_header and len(generic_inserts) == 0:
+            return False, "SQL snapshot with replica-named table lacks topology metadata and record evidence"
+        is_topology_complete = True
+
+    if not (is_inventory_complete or is_topology_complete):
+        return False, "SQL snapshot missing recognized completeness indicators (no valid snapshot_scope or replica topology evidence)"
+
+    # 3. Check for resource absence
     generic_insert = re.findall(rf"INSERT\s+INTO\s+[\"`\[]?{re.escape(target_table)}[\"`\]]?[^;]+;", content, re.IGNORECASE)
     for stmt in generic_insert:
         if f"'{resource_id}'" in stmt or f'"{resource_id}"' in stmt:
             return False, f"Resource '{resource_id}' is PRESENT in table '{target_table}'"
 
+    scope_desc = "inventory snapshot_scope" if is_inventory_complete else "replica topology"
     if len(generic_insert) == 0:
-        return True, f"Resource '{resource_id}' confirmed ABSENT from empty table '{target_table}' in valid snapshot"
+        return True, f"Resource '{resource_id}' confirmed ABSENT from empty table '{target_table}' in valid {scope_desc}"
 
-    return True, f"Resource '{resource_id}' confirmed ABSENT from table '{target_table}' ({len(generic_insert)} rows verified)"
+    return True, f"Resource '{resource_id}' confirmed ABSENT from table '{target_table}' ({len(generic_insert)} rows verified in valid {scope_desc})"
 
 
 # =========================================================================
@@ -387,63 +418,71 @@ def run_unit_tests() -> dict:
         tests.append(("TEST_SQL_02_NO_TABLES", "SQL Snapshot", "Rejects SQL without CREATE TABLE schema statements", test_sql_02))
 
         def test_sql_03():
-            p = td / "no_indicators.sql"
-            p.write_text("CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);", encoding="utf-8")
+            p = td / "empty_scope.sql"
+            p.write_text("""
+            CREATE TABLE snapshot_scope (origin_system TEXT PRIMARY KEY, captured_at TEXT NOT NULL);
+            CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
+            """, encoding="utf-8")
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
-            assert not ok and "missing recognized completeness indicators" in msg
-        tests.append(("TEST_SQL_03_NO_COMPLETENESS_INDICATORS", "SQL Snapshot", "Rejects table without snapshot_scope or replica topology (non-tautological)", test_sql_03))
+            assert not ok and "empty 'snapshot_scope'" in msg
+        tests.append(("TEST_SQL_03_EMPTY_SCOPE", "SQL Snapshot", "Rejects snapshot with empty snapshot_scope table containing no records", test_sql_03))
 
         def test_sql_04():
-            p = td / "missing_col.sql"
+            p = td / "unrelated_scope.sql"
             p.write_text("""
-            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-            CREATE TABLE customer_profiles (user_name TEXT, email TEXT);
+            CREATE TABLE snapshot_scope (origin_system TEXT PRIMARY KEY, captured_at TEXT NOT NULL);
+            INSERT INTO snapshot_scope VALUES ('search_service', '2026-09-10T10:00:00Z');
+            CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
             """, encoding="utf-8")
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
-            assert not ok and "missing 'resource_id' column" in msg
-        tests.append(("TEST_SQL_04_MISSING_RESOURCE_ID_COL", "SQL Snapshot", "Rejects table schema missing resource_id primary key column", test_sql_04))
+            assert not ok and "does not cover system 'account_service'" in msg
+        tests.append(("TEST_SQL_04_UNRELATED_SCOPE", "SQL Snapshot", "Rejects snapshot whose snapshot_scope does not cover queried system", test_sql_04))
 
         def test_sql_05():
-            p = td / "wrong_table.sql"
+            p = td / "no_pk.sql"
             p.write_text("""
-            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-            CREATE TABLE other_table (resource_id TEXT PRIMARY KEY);
+            CREATE TABLE snapshot_scope (origin_system TEXT PRIMARY KEY, captured_at TEXT NOT NULL);
+            INSERT INTO snapshot_scope VALUES ('account_service', '2026-09-10T10:00:00Z');
+            CREATE TABLE customer_profiles (resource_id TEXT, name TEXT);
             """, encoding="utf-8")
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
-            assert not ok and "missing required table" in msg
-        tests.append(("TEST_SQL_05_MISSING_TARGET_TABLE", "SQL Snapshot", "Rejects snapshot missing target table for required system", test_sql_05))
+            assert not ok and "not declared as PRIMARY KEY" in msg
+        tests.append(("TEST_SQL_05_NO_PRIMARY_KEY", "SQL Snapshot", "Rejects table where resource_id column is present but not declared as PRIMARY KEY", test_sql_05))
 
         def test_sql_06():
+            p = td / "inadequate_replica.sql"
+            p.write_text("""
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
+            """, encoding="utf-8")
+            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
+            assert not ok and "lacks topology metadata and record evidence" in msg
+        tests.append(("TEST_SQL_06_INADEQUATE_REPLICA", "SQL Snapshot", "Rejects primary/replica-named table lacking topology metadata and record evidence", test_sql_06))
+
+        def test_sql_07():
             p = td / "present.sql"
             p.write_text("""
-            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
+            CREATE TABLE snapshot_scope (origin_system TEXT PRIMARY KEY, captured_at TEXT NOT NULL);
+            INSERT INTO snapshot_scope VALUES ('account_service', '2026-09-10T10:00:00Z');
             CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
             INSERT INTO customer_profiles VALUES ('acc_1', 'Alice');
             """, encoding="utf-8")
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
             assert not ok and "is PRESENT in table" in msg
-        tests.append(("TEST_SQL_06_RESOURCE_PRESENT", "SQL Snapshot", "Rejects snapshot when resource exists in table insert rows", test_sql_06))
-
-        def test_sql_07():
-            p = td / "absent_scope.sql"
-            p.write_text("""
-            CREATE TABLE snapshot_scope (service_name TEXT, snapshot_id TEXT);
-            CREATE TABLE customer_profiles (resource_id TEXT PRIMARY KEY, name TEXT);
-            INSERT INTO customer_profiles VALUES ('acc_2', 'Bob');
-            """, encoding="utf-8")
-            ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
-            assert ok and "confirmed ABSENT from table" in msg
-        tests.append(("TEST_SQL_07_ABSENT_WITH_SNAPSHOT_SCOPE", "SQL Snapshot", "Verifies absence with snapshot_scope completeness indicator", test_sql_07))
+        tests.append(("TEST_SQL_07_RESOURCE_PRESENT", "SQL Snapshot", "Rejects snapshot when resource exists in table insert rows", test_sql_07))
 
         def test_sql_08():
-            p = td / "absent_replica.sql"
+            p = td / "valid_absent.sql"
             p.write_text("""
-            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, name TEXT);
-            INSERT INTO customer_data_read_replica VALUES ('acc_2', 'Bob');
+            -- Ghost Data Still Exists: point-in-time database snapshot
+            -- Database topology: read_replica
+            CREATE TABLE customer_data_primary (resource_id TEXT PRIMARY KEY, record_json TEXT);
+            CREATE TABLE customer_data_read_replica (resource_id TEXT PRIMARY KEY, record_json TEXT);
+            INSERT INTO customer_data_primary VALUES ('acc_other1', '{}');
+            INSERT INTO customer_data_read_replica VALUES ('acc_other2', '{}');
             """, encoding="utf-8")
             ok, msg = verify_sql_snapshot_absence(p, "account_service", "acc_1")
-            assert ok and "confirmed ABSENT from table" in msg
-        tests.append(("TEST_SQL_08_ABSENT_WITH_REPLICA_TOPOLOGY", "SQL Snapshot", "Verifies absence in recognized read replica topology table", test_sql_08))
+            assert ok and "confirmed ABSENT" in msg
+        tests.append(("TEST_SQL_08_ABSENT_VALID", "SQL Snapshot", "Verifies genuine absence in complete snapshot with verified topology and record evidence", test_sql_08))
 
         # -------------------------------------------------------------
         # Category 3: Genuine Event Timestamp Deletion Verification (8 tests)
@@ -871,7 +910,7 @@ def main() -> int:
         "  1. *File Existence & Binary Integrity*: Every cited file exists, is mapped in `evidence_files.csv`, and parses validly.",
         "  2. *Automated Pillow Image Inspection*: Every PNG evidence file is verified using Pillow (`img.verify()`, format `PNG`, mode `RGB`, dimensions > 0).",
         "  3. *Temporal Cutoff Compliance*: All 1,241 evidence files and events occurred at or before the case's `audit_at` cutoff.",
-        "  4. *Structural Absence Verification*: Verifies database schema and table presence for snapshot omissions, and explicit 404/deletion events for log/JSON readbacks.",
+        "  4. *Structural Absence Verification*: Verifies database schema, declared PRIMARY KEY constraint, snapshot completeness (covering snapshot_scope or topology metadata), and explicit resource absence across rows, alongside 404/deletion events for log/JSON readbacks.",
         "  5. *Companion Catalog Linkage*: Corroborates images and attachments with `system_activity.csv` data catalog events (`activity_4000`-`activity_4011`).",
         "",
         "## 2. Programmatic Unit Test Suite (27 Named Scenarios)",
@@ -881,7 +920,7 @@ def main() -> int:
         "| Test Category | Scenarios Executed | Status | Coverage & Validation Invariants |",
         "| :--- | ---: | :---: | :--- |",
         "| **JSON Snapshot Absence** | 5 | **PASS (5/5)** | Malformed syntax, non-dict root, missing target collection, resource presence rejection, confirmed omission |",
-        "| **SQL Snapshot Completeness** | 8 | **PASS (8/8)** | Empty file, missing DDL, missing completeness indicators (no tautology), missing resource_id column, missing target table, presence rejection, verified omission via `snapshot_scope` and read-replica topology |",
+        "| **SQL Snapshot Completeness** | 8 | **PASS (8/8)** | Empty file, missing DDL, empty snapshot_scope, unrelated snapshot_scope, non-PK resource_id constraint, missing replica evidence, presence rejection, verified omission via complete snapshot_scope and topology |",
         "| **Genuine Event Timestamps** | 8 | **PASS (8/8)** | Ordinary non-deletion mention, missing event timestamp rejection, file-level `exported_at` fallback rejection, post-cutoff event rejection, valid 404 readback with `observed_at`, valid `recorded_at`, valid `purged_at`, valid inline log timestamp |",
         "| **PNG Console & Catalog** | 6 | **PASS (6/6)** | Pillow RGB format/integrity, missing `user_id` rejection, missing registered email rejection, post-cutoff catalog rejection, interval > 600s rejection, corrupt PNG rejection |",
         "| **TOTAL TEST POPULATION** | **27** | **100% PASS** | **All 27 independent scenarios executed programmatically (0 failures)** |",

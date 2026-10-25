@@ -162,10 +162,10 @@ During iterative development and regression testing, several key edge cases were
      - `RESTORE_RISK_EVIDENCE`: 57 (4.59%)
      - `VISUAL_CONSOLE_SCREENSHOT`: 11 (0.89%)
    - **Absence Verification Methodology**:
-     - 70 snapshot-omission steps verified against complete SQL schemas (tables present, records omitted, confirmed via `snapshot_scope` or primary/replica topology without tautological checks) and JSON bundle collections.
+     - 70 snapshot-omission steps verified against complete SQL schemas (target tables present, declared PRIMARY KEY constraint verified, records omitted, confirmed via snapshot_scope coverage or primary/replica topology metadata and record evidence) and JSON bundle collections.
      - 78 deletion-log steps verified against explicit genuine event-level timestamps (`recorded_at`, `observed_at`, `purged_at`, or inline log timestamp) with status 404 readbacks, rows=0, or deletion events occurring at or before `audit_at` (no file-level or header fallbacks).
    - **Programmatic Unit Test Suite (27 Named Scenarios)**:
-     - 27 independent scenarios executed programmatically covering JSON snapshot absence (5), SQL schema completeness (8), genuine event timestamps (8), and PNG/catalog corroboration (6) with 100% pass rate (27 passed, 0 failed).
+     - 27 independent scenarios executed programmatically covering JSON snapshot absence (5), SQL schema completeness and PRIMARY KEY constraint (8), genuine event timestamps (8), and PNG/catalog corroboration (6) with 100% pass rate (27 passed, 0 failed).
    - **Visual Evidence & Catalog Series (`activity_4000`–`4011`)**:
      - All 11 PNG screenshots verified via Pillow (`img.verify()`, format `PNG`, dimensions > 0, RGB mode) and matched to companion catalog events (`activity_4000`–`4008`, `4010`–`4011`) connecting resource, `user_id`, and registered email within $\Delta t \le 600\text{s}$ prior to `audit_at`.
      - `activity_4009` in `system_activity.csv` connects `export_1842` (`NST-2026-0718-1842`) to `user_18` for `evidence_18` (`account_history_report_20260718.pdf`), which was parsed as a PDF text document.

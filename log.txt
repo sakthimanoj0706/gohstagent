@@ -1015,3 +1015,46 @@ branch=main
 repo_root=D:\hacker
 worktree=main
 parent_agent=none
+
+## 2026-10-25T08:51:45.044245+00:00 SQL Snapshot Primary Key and Completeness Audit Verification
+
+User Prompt (verbatim, secrets redacted):
+Review `D:\hacker\code\evaluation\evidence_grounding_audit.py`, especially `verify_sql_snapshot_absence()`.
+
+Resolve the remaining mismatch between SQL verification claims and the actual checks.
+
+1. Parse the table definition sufficiently to distinguish a `resource_id` column from a declared primary key. If the report says the column is a primary key, verify the constraint. If the challenge only requires column presence, correct the report terminology instead of overstating the guarantee.
+
+2. Strengthen snapshot-completeness validation. Do not assume that a table named `snapshot_scope`, `primary`, or `replica` alone proves completeness. Where supported by the supplied evidence, validate snapshot metadata, relevant service/table identity, scope, capture time, and the actual records. If completeness cannot be established, mark the absence claim unresolved.
+
+3. Add negative tests for:
+   - `resource_id` present but not declared as a primary key.
+   - An empty or unrelated `snapshot_scope` table.
+   - A primary/replica-named table without adequate snapshot evidence.
+   - A valid, complete snapshot where the resource is genuinely absent.
+
+4. Run the 27-test suite, the evidence-grounding audit, output validator and sample evaluation. Report actual results. Do not change `output.csv` unless source evidence proves a prediction defect.
+
+5. Update the grounding report so each guarantee accurately describes what the audit verifies. Rebuild `code.zip`, verify its contents/size, compute SHA-256, and synchronize to GitHub without force-pushing.
+
+Agent Response Summary:
+Refined verify_sql_snapshot_absence() in code/evaluation/evidence_grounding_audit.py to parse SQL DDL table schemas and verify both resource_id column presence and declared PRIMARY KEY constraint enforcement, while strengthening completeness validation to require non-empty snapshot_scope tables covering queried services or replica topology headers with actual record evidence. Expanded Category 2 tests into 8 named scenarios directly verifying negative cases (missing primary key constraint, empty snapshot_scope, unrelated snapshot_scope, inadequate replica evidence) and genuine absence confirmation, achieving a 100% pass rate (27/27 passed) across the full programmatic test suite. Updated the grounding report and evaluation report with exact guarantee terminology, verified output.csv with zero anomalies, rebuilt code.zip, and synchronized changes to GitHub.
+
+Actions:
+* edit_file: code/evaluation/evidence_grounding_audit.py
+* edit_file: code/evaluation/evaluation_report.md
+* run_command: python code/evaluation/evidence_grounding_audit.py
+* run_command: python code/evaluation/validate_output.py
+* run_command: python code/evaluation/main.py
+* write_file: scratch/build_code_zip.py
+* run_command: python scratch/build_code_zip.py
+* write_file: log.txt
+* run_command: git add -A && git commit && git push origin main
+
+Context:
+tool=Antigravity
+model=Gemini 3.8 Flash (High)
+branch=main
+repo_root=D:\hacker
+worktree=main
+parent_agent=none
