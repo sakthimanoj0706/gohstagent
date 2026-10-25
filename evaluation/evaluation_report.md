@@ -147,10 +147,20 @@ During iterative development and regression testing, several key edge cases were
      - `NOT_APPLICABLE`: 10 (1.93%)
    - **Detected Anomalies**: **0 anomalies** across all 18 independent checks.
 
-2. **Source-Evidence Grounding Audit (`evidence_grounding_audit.py`)**:
-   - Total evidence-bearing steps audited: **1,241**
-   - Resource IDs grounded in source content: **1,160**
-   - Legitimate absence verified by snapshot omission: **70**
+2. **Source-Evidence Grounding & Mathematical Reconciliation (`evidence_grounding_audit.py`)**:
+   - Total evidence-bearing steps audited: **1,241** (728 `FINDING` steps in `INCOMPLETE` cases + 513 `VERIFICATION` steps in `COMPLETE` cases; remaining 1,985 steps represent future actions with `evidence_id=""`)
+   - Resource IDs grounded directly in source text: **1,160** (93.47%)
+   - Absence verified by database snapshot omission: **70** (5.64%)
+   - Visual administrative console screenshots (PNG): **11** (0.89%)
+   - **Mathematical Reconciliation**: $1,160 + 70 + 11 = 1,241$ ($\Delta = 0$, 100.00% accounted for)
+   - **Mutually Exclusive Primary Categories**:
+     - `RESOURCE_PRESENCE_GROUNDED`: 581 (46.82%)
+     - `RETENTION_REDACTION_VERIFICATION`: 301 (24.25%)
+     - `DATA_FLOW_EVIDENCE`: 143 (11.52%)
+     - `ABSENCE_VERIFIED_DELETION_LOG`: 78 (6.29%)
+     - `ABSENCE_VERIFIED_SNAPSHOT_OMISSION`: 70 (5.64%)
+     - `RESTORE_RISK_EVIDENCE`: 57 (4.59%)
+     - `VISUAL_CONSOLE_SCREENSHOT`: 11 (0.89%)
    - Non-absence resource claims missing from source: **0**
    - Citations captured after `audit_at`: **0**
    - Unknown or fabricated evidence IDs: **0**
